@@ -54,3 +54,6 @@ type GetProjectByCategory struct {
 	Name      string `json:"name"`
 	Thumbnail string `json:"thumbnail"`
 }
+type PostVote struct {
+	Msg string `json:"msg"`
+}
