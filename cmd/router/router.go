@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	project "github.com/hacktues-9/tf-api/cmd/projects"
+	votes "github.com/hacktues-9/tf-api/cmd/votes"
 	database "github.com/hacktues-9/tf-api/pkg/database"
 
 	"github.com/gorilla/mux"
@@ -58,10 +59,13 @@ func (r *Router) Projects() {
 }
 
 func (r *Router) Votes() {
-	//router := r.GetRouter()
-	//PostReq := router.PathPrefix("/post").Subrouter().StrictSlash(true)
+	router := r.GetRouter()
+	PostReq := router.PathPrefix("/post").Subrouter().StrictSlash(true)
 	//UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
-	//PostReq.HandleFunc("/vote", PostVote).Methods("POST")
+	PostReq.HandleFunc("/vote", func(writer http.ResponseWriter, request *http.Request) {
+		// call function PostVote from projects package
+		votes.PostVote(writer, request, r.GetDB())
+	}).Methods("POST")
 	//UpdateReq.HandleFunc("/verify_vote", UpdateVote).Methods("PUT")
 }
 
