@@ -36,12 +36,15 @@ type Pictures struct {
 
 type Votes struct {
 	gorm.Model
-	Email      string   `json:"email" gorm:"unique, not null"`
-	Verified   bool     `json:"verified" gorm:"default:false"`
-	NetworksID uint     `json:"networks_id" gorm:"unique, not null"`
-	Networks   Projects `json:"networks" gorm:"foreignKey:NetworksID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
-	SoftwareID uint     `json:"software_id" gorm:"unique, not null"`
-	Software   Projects `json:"software" gorm:"foreignKey:SoftwareID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
-	EmbeddedID uint     `json:"embedded_id" gorm:"unique, not null"`
-	Embedded   Projects `json:"embedded" gorm:"foreignKey:EmbeddedID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	Name        string   `json:"name" gorm:"unique, not null"`
+	Email       string   `json:"email" gorm:"unique, not null"`
+	Verified    bool     `json:"verified" gorm:"default:false"`
+	NetworksID  uint     `json:"networks_id" gorm:"unique, not null"`
+	Networks    Projects `json:"networks" gorm:"foreignKey:NetworksID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	SoftwareID  uint     `json:"software_id" gorm:"unique, not null"`
+	Software    Projects `json:"software" gorm:"foreignKey:SoftwareID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	EmbeddedID  uint     `json:"embedded_id" gorm:"unique, not null"`
+	Embedded    Projects `json:"embedded" gorm:"foreignKey:EmbeddedID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	BattleBotID uint     `json:"battlebot_id" gorm:"unique, not null"`
+	BattleBot   Projects `json:"battlebot" gorm:"foreignKey:BattleBotID; constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }
