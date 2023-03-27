@@ -3,15 +3,25 @@ package votes
 import (
 	"encoding/json"
 	"fmt"
-	"gorm.io/gorm"
 	"net/http"
+	"os"
+	"time"
 
+	"gorm.io/gorm"
+
+	email "github.com/hacktues-9/tf-api/pkg/email"
 	models "github.com/hacktues-9/tf-api/pkg/models"
 )
 
 func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	privateKey := os.Getenv("PRIVATE_KEY")
+	publicKey := os.Getenv("PUBLIC_KEY")
+
 	var reqVote models.VoteRequest
 	var voteRes models.PostVote
+
+	//create a query for gorm
+	fieldsToOmit := []string{}
 	if err := json.NewDecoder(r.Body).Decode(&reqVote); err != nil {
 		voteRes.Msg = "Error decoding JSON"
 
@@ -24,7 +34,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		}
 		return
 	}
-	
+
 	var dupVote models.Votes
 	db.Where("email = ? ", reqVote.Email).First(&dupVote)
 	if dupVote.ID != 0 {
@@ -41,7 +51,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 
 	var networksProject models.Projects
 	db.Where("id = ? AND category = 'networks'", reqVote.NetworksID).First(&networksProject)
-	if networksProject.ID == 0 {
+	if networksProject.ID == 0 && reqVote.NetworksID != 0 {
 		voteRes.Msg = "Networks project not found"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -51,11 +61,13 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 			return
 		}
 		return
+	} else {
+		fieldsToOmit = append(fieldsToOmit, "NetworksID")
 	}
 
 	var softwareProject models.Projects
 	db.Where("id = ? AND category = 'software'", reqVote.SoftwareID).First(&softwareProject)
-	if softwareProject.ID == 0 {
+	if softwareProject.ID == 0 && reqVote.SoftwareID != 0 {
 		voteRes.Msg = "Software project not found"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -65,11 +77,13 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 			return
 		}
 		return
+	} else {
+		fieldsToOmit = append(fieldsToOmit, "SoftwareID")
 	}
 
 	var embeddedProject models.Projects
 	db.Where("id = ? AND category = 'embedded'", reqVote.EmbeddedID).First(&embeddedProject)
-	if embeddedProject.ID == 0 {
+	if embeddedProject.ID == 0 && reqVote.EmbeddedID != 0 {
 		voteRes.Msg = "Embedded project not found"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -79,11 +93,13 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 			return
 		}
 		return
+	} else {
+		fieldsToOmit = append(fieldsToOmit, "EmbeddedID")
 	}
 
 	var battlebotProject models.Projects
 	db.Where("id = ? AND category = 'battlebot'", reqVote.BattleBotID).First(&battlebotProject)
-	if battlebotProject.ID == 0 {
+	if battlebotProject.ID == 0 && reqVote.BattleBotID != 0 {
 		voteRes.Msg = "Battlebot project not found"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -93,6 +109,8 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 			return
 		}
 		return
+	} else {
+		fieldsToOmit = append(fieldsToOmit, "BattleBotID")
 	}
 
 	vote := models.Votes{
@@ -109,6 +127,13 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	voteRes.Msg = "Successfully voted"
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(voteRes)
+	if err != nil {
+		fmt.Println("[PostVote] Error encoding JSON")
+		return
+	}
+}
+
 	err := json.NewEncoder(w).Encode(voteRes)
 	if err != nil {
 		fmt.Println("[PostVote] Error encoding JSON")
