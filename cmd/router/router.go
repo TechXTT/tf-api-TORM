@@ -61,12 +61,15 @@ func (r *Router) Projects() {
 func (r *Router) Votes() {
 	router := r.GetRouter()
 	PostReq := router.PathPrefix("/post").Subrouter().StrictSlash(true)
-	//UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
+	UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
 	PostReq.HandleFunc("/vote", func(writer http.ResponseWriter, request *http.Request) {
 		// call function PostVote from projects package
 		votes.PostVote(writer, request, r.GetDB())
 	}).Methods("POST")
-	//UpdateReq.HandleFunc("/verify_vote", UpdateVote).Methods("PUT")
+	UpdateReq.HandleFunc("/verify_vote", func(writer http.ResponseWriter, request *http.Request) {
+		// call function VerifyVote from projects package
+		votes.VerifyVote(writer, request, r.GetDB())
+	}).Methods("PUT")
 }
 
 func (r *Router) Database() {
@@ -88,6 +91,8 @@ func (r *Router) Database() {
 
 func (r *Router) Run() {
 	r.Database()
+	r.Projects()
+	r.Votes()
 	fmt.Println("Projects routes initialized")
 	err := http.ListenAndServe(":8080", r)
 	if err != nil {
