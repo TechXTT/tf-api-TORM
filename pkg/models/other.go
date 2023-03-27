@@ -8,3 +8,7 @@ type VoteRequest struct {
 	EmbeddedID  uint   `json:"embedded_id"`
 	BattleBotID uint   `json:"battlebot_id"`
 }
+
+type VerifyVoteRequest struct {
+	Token string `json:"token"`
+}
