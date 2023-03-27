@@ -92,3 +92,21 @@ func SendEmailOAUTH2(to string, data interface{}, template string) (bool, error)
 	}
 	return true, nil
 }
+
+func GenerateVerificationLink(email string, privateKey string, publicKey string, TokenTTL time.Duration) string {
+	token, err := jwt.CreateToken(TokenTTL, email, privateKey, publicKey)
+	if err != nil {
+		fmt.Println("Error creating token: ", err)
+		return ""
+	}
+	return fmt.Sprintf("https://tuesfest.bg/verify/%s", token)
+}
+
+func ValidateEmailToken(token string) (string, error) {
+	sub, err := jwt.ValidateStringToken(token, os.Getenv("PUBLIC_KEY"))
+	if err != nil {
+		fmt.Println("Error validating token: ", err)
+		return "", err
+	}
+	return sub, nil
+}
