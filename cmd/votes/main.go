@@ -182,9 +182,106 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	}
 }
 
-	err := json.NewEncoder(w).Encode(voteRes)
+func VerifyVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	var reqVote models.VerifyVoteRequest
+	var voteRes models.PostVote
+
+	if err := json.NewDecoder(r.Body).Decode(&reqVote); err != nil {
+		voteRes.Msg = "Error"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Error decoding JSON")
+		return
+	}
+
+	if reqVote.Token == "" {
+		voteRes.Msg = "Invalid"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Token not found")
+		return
+	}
+
+	claims, err := email.ValidateEmailToken(reqVote.Token)
 	if err != nil {
-		fmt.Println("[PostVote] Error encoding JSON")
+		voteRes.Msg = "Invalid"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Error validating token")
+		return
+	}
+
+	var vote models.Votes
+	db.Where("email = ?", claims).First(&vote)
+	if vote.ID == 0 {
+		voteRes.Msg = "Invalid"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Error finding vote")
+		return
+	}
+
+	if vote.Verified {
+		voteRes.Msg = "Already"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Vote already verified")
+		return
+	}
+
+	vote.Verified = true
+
+	if err := db.Save(&vote).Error; err != nil {
+		voteRes.Msg = "Error"
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[VerifyVote] Error encoding JSON")
+			return
+		}
+		fmt.Println("[VerifyVote] Error saving vote")
+		return
+	}
+
+	voteRes.Msg = "Successfully verified vote"
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	err = json.NewEncoder(w).Encode(voteRes)
+	if err != nil {
+		fmt.Println("[VerifyVote] Error encoding JSON")
 		return
 	}
 }
