@@ -122,7 +122,55 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		BattleBotID: reqVote.BattleBotID,
 	}
 
-	db.Create(&vote)
+	if err := db.Omit(fieldsToOmit...).Create(&vote).Error; err != nil {
+		//print the query
+
+		voteRes.Msg = "Error creating vote"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
+
+	data := struct {
+		RecieverName     string
+		SenderName       string
+		VerificationLink string
+	}{
+		RecieverName:     reqVote.Name,
+		SenderName:       "TuesFest 2023",
+		VerificationLink: email.GenerateVerificationLink(reqVote.Email, privateKey, publicKey, 24*time.Hour),
+	}
+
+	if data.VerificationLink == "" {
+		voteRes.Msg = "Error generating verification link"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
+
+	email.OAuthGmailService()
+	_, err := email.SendEmailOAUTH2(reqVote.Email, data, "template.txt")
+	if err != nil {
+		voteRes.Msg = "Error sending email"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
 
 	voteRes.Msg = "Successfully voted"
 	w.Header().Set("Content-Type", "application/json")
