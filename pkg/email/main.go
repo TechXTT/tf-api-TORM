@@ -1,18 +1,40 @@
 package email
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html/template"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
+
+	jwt "github.com/hacktues-9/tf-api/pkg/jwt"
 )
+
+func parseTemplate(templateFileName string, data interface{}) (string, error) {
+	templatePath, err := filepath.Abs(fmt.Sprintf("./pkg/email/%s", templateFileName))
+	if err != nil {
+		return "", err
+	}
+	t, err := template.ParseFiles(templatePath)
+	if err != nil {
+		return "", err
+	}
+	buf := new(bytes.Buffer)
+	if err = t.Execute(buf, data); err != nil {
+		return "", err
+	}
+	body := buf.String()
+	return body, nil
+}
 
 // GmailService : Gmail client for sending email
 var GmailService *gmail.Service
@@ -41,26 +63,31 @@ func OAuthGmailService() {
 
 	GmailService = srv
 	if GmailService != nil {
-		fmt.Println("Email service is initialized \n")
+		fmt.Println("Email service is initialized")
 	}
 }
 
-func SendEmailOAUTH2(to string, data interface{}) (bool, error) {
+func SendEmailOAUTH2(to string, data interface{}, template string) (bool, error) {
 
-	emailBody := `Hello, {{.RecieverName}}! This is a test email from {{.SenderName}}`
+	emailBody, err := parseTemplate(template, data)
+	if err != nil {
+		fmt.Println("Error parsing template: ", err)
+		return false, err
+	}
 
 	var message gmail.Message
 
 	emailTo := "To: " + to + "\r\n"
-	subject := "Subject: " + "Test Email form Gmail API using OAuth" + "\n"
+	subject := "Subject: " + "Tues Fest 2023 Vote" + "\n"
 	mime := "MIME-version: 1.0;\nContent-Type: text/plain; charset=\"UTF-8\";\n\n"
 	msg := []byte(emailTo + subject + mime + "\n" + emailBody)
 
 	message.Raw = base64.URLEncoding.EncodeToString(msg)
 
 	// Send the message
-	_, err := GmailService.Users.Messages.Send("me", &message).Do()
+	_, err = GmailService.Users.Messages.Send("me", &message).Do()
 	if err != nil {
+		fmt.Println("Error sending email: ", err)
 		return false, err
 	}
 	return true, nil
