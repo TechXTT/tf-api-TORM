@@ -1,4 +1,4 @@
-package main
+package token
 
 // every 3599 seconds, the token expires and we need to refresh it with a new one from the API
 import (
