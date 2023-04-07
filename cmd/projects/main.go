@@ -2,9 +2,10 @@ package projects
 
 import (
 	"encoding/json"
+	"net/http"
+
 	models "github.com/hacktues-9/tf-api/pkg/models"
 	"gorm.io/gorm"
-	"net/http"
 )
 
 func GetProjects(w http.ResponseWriter, r *http.Request, db *gorm.DB) {

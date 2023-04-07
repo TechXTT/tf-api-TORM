@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/joho/godotenv/autoload"
+	"github.com/joho/godotenv"
 )
 
 type Body struct {
@@ -27,7 +27,13 @@ type Response struct {
 }
 
 func main() {
-	timer := time.NewTicker(3599 * time.Second)
+	err := godotenv.Load(".env")
+
+	if err != nil {
+		fmt.Println("[ERROR] Could not load .env file: ", err)
+		panic(err)
+	}
+	timer := time.NewTicker(1 * time.Second)
 	access_token := ""
 	client_id := os.Getenv("GMAIL_CLIENT_ID")
 	client_secret := os.Getenv("GMAIL_CLIENT_SECRET")
@@ -59,6 +65,11 @@ func main() {
 			}
 
 			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				fmt.Println("[ERROR] Could not get token: ", resp.StatusCode)
+				panic(err)
+			}
 
 			err = json.NewDecoder(resp.Body).Decode(&response)
 			if err != nil {
@@ -127,6 +138,7 @@ func main() {
 			}
 
 			f.Sync()
+			fmt.Println("Access token refreshed: ", access_token)
 		}
 	}
 }

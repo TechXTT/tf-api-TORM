@@ -93,7 +93,8 @@ func (r *Router) Run() {
 	r.Database()
 	r.Projects()
 	r.Votes()
-	fmt.Println("Projects routes initialized")
+	r.Init()
+	fmt.Println("Routes initialized")
 	err := http.ListenAndServe(":8080", r)
 	if err != nil {
 		fmt.Println(err)
