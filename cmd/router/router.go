@@ -41,6 +41,7 @@ func (r *Router) Init() {
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello World!"))
 	}).Methods("GET")
+	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 }
 
 func (r *Router) Projects() {
