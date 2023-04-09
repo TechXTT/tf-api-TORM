@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	_ "net/http/pprof"
+
 	project "github.com/hacktues-9/tf-api/cmd/projects"
 	votes "github.com/hacktues-9/tf-api/cmd/votes"
 	database "github.com/hacktues-9/tf-api/pkg/database"
@@ -95,23 +97,6 @@ func (r *Router) Run() {
 	r.Votes()
 	r.Init()
 	fmt.Println("Routes initialized")
-
-	// print all routes
-
-	r.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
-		t, err := route.GetPathTemplate()
-		if err != nil {
-			fmt.Println(err)
-			return err
-		}
-		m, err := route.GetMethods()
-		if err != nil {
-			fmt.Println(err)
-			return err
-		}
-		fmt.Printf("%s\t%s \n", m, t)
-		return nil
-	})
 
 	err := http.ListenAndServe(":8080", r)
 	if err != nil {
