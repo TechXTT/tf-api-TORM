@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,6 +20,20 @@ import (
 
 	jwt "github.com/hacktues-9/tf-api/pkg/jwt"
 )
+
+type Body struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	RefreshToken string `json:"refresh_token"`
+	GrantType    string `json:"grant_type"`
+}
+
+type Response struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+	Scope       string `json:"scope"`
+	TokenType   string `json:"token_type"`
+}
 
 func parseTemplate(templateFileName string, data interface{}) (string, error) {
 	templatePath, err := filepath.Abs(fmt.Sprintf("./pkg/email/%s", templateFileName))
@@ -47,14 +63,56 @@ func OAuthGmailService() {
 		RedirectURL:  "http://localhost",
 	}
 
-	token := oauth2.Token{
-		AccessToken:  os.Getenv("GMAIL_ACCESS_TOKEN"),
-		RefreshToken: os.Getenv("GMAIL_REFRESH_TOKEN"),
-		TokenType:    "Bearer",
-		Expiry:       time.Now(),
-	}
+	access_token := ""
+	refresh_token := os.Getenv("GMAIL_REFRESH_TOKEN")
 
-	var tokenSource = config.TokenSource(context.Background(), &token)
+	tokenSource := func() oauth2.TokenSource {
+		if access_token == "" {
+			body := Body{
+				ClientID:     os.Getenv("GMAIL_CLIENT_ID"),
+				ClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
+				RefreshToken: os.Getenv("GMAIL_REFRESH_TOKEN"),
+				GrantType:    "refresh_token",
+			}
+
+			jsonBody, err := json.Marshal(body)
+			if err != nil {
+				fmt.Println("[ERROR] Could not marshal body: ", err)
+				panic(err)
+			}
+
+			resp, err := http.Post("https://www.googleapis.com/oauth2/v4/token", "application/json", bytes.NewBuffer(jsonBody))
+			if err != nil {
+				fmt.Println("[ERROR] Could not post to url: ", err)
+				panic(err)
+			}
+
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				fmt.Println("[ERROR] Status code is not 200: ", resp.StatusCode)
+				panic(err)
+			}
+
+			var response Response
+			err = json.NewDecoder(resp.Body).Decode(&response)
+			if err != nil {
+				fmt.Println("[ERROR] Could not decode response: ", err)
+				panic(err)
+			}
+
+			access_token = response.AccessToken
+		}
+
+		token := oauth2.Token{
+			AccessToken:  access_token,
+			RefreshToken: refresh_token,
+			TokenType:    "Bearer",
+			Expiry:       time.Now(),
+		}
+
+		return config.TokenSource(context.Background(), &token)
+	}()
 
 	srv, err := gmail.NewService(context.Background(), option.WithTokenSource(tokenSource))
 	if err != nil {
