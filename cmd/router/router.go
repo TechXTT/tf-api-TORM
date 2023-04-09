@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	_ "net/http/pprof"
+	"net/http/pprof"
 
 	project "github.com/hacktues-9/tf-api/cmd/projects"
 	votes "github.com/hacktues-9/tf-api/cmd/votes"
@@ -41,7 +41,25 @@ func (r *Router) Init() {
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Hello World!"))
 	}).Methods("GET")
-	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
+}
+
+func (r *Router) Pprof() {
+	router := r.GetRouter()
+	debugProf := router.PathPrefix("/debug/pprof").Subrouter()
+	debugProf.HandleFunc("/", pprof.Index)
+	debugProf.HandleFunc("/cmdline", pprof.Cmdline)
+	debugProf.HandleFunc("/symbol", pprof.Symbol)
+	debugProf.HandleFunc("/trace", pprof.Trace)
+	debugProf.HandleFunc("/profile", pprof.Profile)
+
+	// Manually add support for paths not easily linked as above
+	// Hooking this up is actually very convoluted and only a few answers on how to do it
+	// https://stackoverflow.com/questions/19591065/profiling-go-web-application-built-with-gorillas-mux-with-net-http-pprof
+	debugProf.Handle("/goroutine", pprof.Handler("goroutine"))
+	debugProf.Handle("/heap", pprof.Handler("heap"))
+	debugProf.Handle("/threadcreate", pprof.Handler("threadcreate"))
+	debugProf.Handle("/block", pprof.Handler("block"))
+	debugProf.Handle("/vars", http.DefaultServeMux)
 }
 
 func (r *Router) Projects() {
@@ -96,6 +114,7 @@ func (r *Router) Run() {
 	r.Database()
 	r.Projects()
 	r.Votes()
+	r.Pprof()
 	r.Init()
 	fmt.Println("Routes initialized")
 
