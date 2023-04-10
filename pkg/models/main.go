@@ -21,6 +21,7 @@ type Creators struct {
 	gorm.Model
 	Name      string   `json:"name"`
 	Email     string   `json:"email"`
+	Phone     string   `json:"phone"`
 	Grade     int      `json:"grade" gorm:"check:grade IN (8, 9, 10, 11, 12)"`
 	Class     string   `json:"class" gorm:"check:class IN ('А', 'Б', 'В', 'Г')"`
 	ProjectID uint     `json:"project_id" gorm:"unique, not null"`
