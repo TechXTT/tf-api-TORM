@@ -3,7 +3,7 @@ create function get_projects()
     language sql
 as
 $$
-select p.id, p.name, coalesce((select url from pictures where project_id = p.id order by is_thumbnail desc nulls last limit 2)), p.category from projects p order by p.id;
+select p.id, p.name, coalesce((select url from pictures where project_id = p.id order by is_thumbnail desc nulls last limit 1)), p.category from projects p order by p.id;
 $$;
 
 alter function get_projects() owner to doadmin;
