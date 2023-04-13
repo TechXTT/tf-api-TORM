@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gorilla/mux"
 	models "github.com/hacktues-9/tf-api/pkg/models"
 	"gorm.io/gorm"
 )
@@ -20,7 +21,7 @@ func GetProjects(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 func GetProject(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	var getProject models.GetProject
 	var project models.GetProjectResponse
-	db.Raw("SELECT * FROM get_project(?)", r.URL.Query().Get("id")).Scan(&getProject)
+	db.Raw("SELECT * FROM get_project(?)", mux.Vars(r)["id"]).Scan(&getProject)
 
 	project.ID = getProject.ID
 	project.Name = getProject.Name
@@ -34,11 +35,11 @@ func GetProject(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	project.Links.Demo = getProject.Demo
 
 	var creators []models.GetProjectCreators
-	db.Raw("SELECT name, concat(grade, class) as class FROM creators WHERE project_id = ?", r.URL.Query().Get("id")).Scan(&creators)
+	db.Raw("SELECT name, concat(grade, class) as class FROM creators WHERE project_id = ?", mux.Vars(r)["id"]).Scan(&creators)
 	project.Creators = creators
 
 	var pictures []models.GetProjectPictures
-	db.Raw("SELECT url, is_thumbnail FROM pictures WHERE project_id = ?", r.URL.Query().Get("id")).Scan(&pictures)
+	db.Raw("SELECT url, is_thumbnail FROM pictures WHERE project_id = ?", mux.Vars(r)["id"]).Scan(&pictures)
 	project.Pictures = pictures
 
 	w.Header().Set("Content-Type", "application/json")
@@ -48,7 +49,7 @@ func GetProject(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 
 func GetProjectsByCategory(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	var projects []models.GetProjectByCategory
-	db.Raw("SELECT * FROM get_projects_by_category(?)", r.URL.Query().Get("category")).Scan(&projects)
+	db.Raw("SELECT * FROM get_projects_by_category(?)", mux.Vars(r)["category"]).Scan(&projects)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
