@@ -4,6 +4,7 @@ type GetProjects struct {
 	ID        uint   `json:"id"`
 	Name      string `json:"name"`
 	Thumbnail string `json:"thumbnail"`
+	Video     string `json:"video"`
 	Category  string `json:"category"`
 }
 
