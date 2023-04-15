@@ -33,6 +33,8 @@ func GetProject(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	project.HasThumbnail = getProject.HasThumbnail
 	project.Links.Github = getProject.Github
 	project.Links.Demo = getProject.Demo
+	project.NextId = getProject.NextId
+	project.PrevId = getProject.PrevId
 
 	var creators []models.GetProjectCreators
 	db.Raw("SELECT name, concat(grade, class) as class FROM creators WHERE project_id = ?", mux.Vars(r)["id"]).Scan(&creators)
