@@ -19,6 +19,8 @@ type GetProject struct {
 	HasThumbnail bool   `json:"has_thumbnail"`
 	Demo         string `json:"demo"`
 	Github       string `json:"github"`
+	NextId       uint   `json:"next_id"`
+	PrevId       uint   `json:"prev_id"`
 }
 
 type GetProjectLinks struct {
