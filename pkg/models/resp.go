@@ -56,6 +56,7 @@ type GetProjectByCategory struct {
 	ID        uint   `json:"id"`
 	Name      string `json:"name"`
 	Thumbnail string `json:"thumbnail"`
+	Video     string `json:"video"`
 }
 type PostVote struct {
 	Msg string `json:"msg"`
