@@ -50,6 +50,8 @@ type GetProjectResponse struct {
 	Links        GetProjectLinks      `json:"links"`
 	Creators     []GetProjectCreators `json:"creators"`
 	Pictures     []GetProjectPictures `json:"pictures"`
+ NextId       uint                 `json:"next_id"`
+	PrevId       uint                 `json:"prev_id"`
 }
 
 type GetProjectByCategory struct {
