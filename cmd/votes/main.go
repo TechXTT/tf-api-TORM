@@ -122,7 +122,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		BattleBotID: reqVote.BattleBotID,
 	}
 
-	if err := db.Omit(fieldsToOmit...).Create(&vote).Error; err != nil {
+	if err := db.Create(&vote).Error; err != nil {
 		//print the query
 
 		voteRes.Msg = "Error creating vote"
