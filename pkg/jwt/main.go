@@ -3,6 +3,8 @@ package jwt
 import (
 	b64 "encoding/base64"
 	"fmt"
+	"net/http"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -76,4 +78,50 @@ func ValidateStringToken(token string, publicKey string) (string, error) {
 	}
 
 	return fmt.Sprintf("%v", (*claims)["sub"]), nil
+}
+
+func ValidateToken(token string, publicKey string) (uint, error) {
+	publicKeyData, err := b64.StdEncoding.DecodeString(publicKey)
+	if err != nil {
+		return 0, fmt.Errorf("validateToken: decode: public key: %w", err)
+	}
+
+	parsedPublicKey, err := jwt.ParseRSAPublicKeyFromPEM(publicKeyData)
+	if err != nil {
+		return 0, fmt.Errorf("validateToken: parse: public key: %w", err)
+	}
+
+	parsedToken, err := jwt.ParseWithClaims(token, &jwt.MapClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return parsedPublicKey, nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("validateToken: parse token: %w", err)
+	}
+
+	claims, ok := parsedToken.Claims.(*jwt.MapClaims)
+	if !ok || !parsedToken.Valid {
+		return 0, fmt.Errorf("validateToken: claims: %w", err)
+	}
+
+	return uint((*claims)["sub"].(float64)), nil
+}
+
+func CheckCookie(r *http.Request) (uint, error) {
+	cookie, err := r.Cookie("vote")
+	if err != nil {
+		return 0, err
+	}
+	token := cookie.Value
+
+	if token == "" {
+		return 0, nil
+	}
+
+	sub, err := ValidateToken(token, os.Getenv("PUBLIC_KEY"))
+	if err != nil {
+		fmt.Println("Error validating token: ", err)
+		return 0, err
+	}
+
+	return sub, nil
 }

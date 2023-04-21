@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	email "github.com/hacktues-9/tf-api/pkg/email"
+	jwt "github.com/hacktues-9/tf-api/pkg/jwt"
 	models "github.com/hacktues-9/tf-api/pkg/models"
 )
 
@@ -19,6 +20,31 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 
 	var reqVote models.VoteRequest
 	var voteRes models.PostVote
+
+	sub, err := jwt.CheckCookie(r)
+	if err != nil {
+		voteRes.Msg = "Invalid token"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
+
+	if sub != 0 {
+		voteRes.Msg = "Already voted"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
 
 	//create a query for gorm
 	fieldsToOmit := []string{}
@@ -159,7 +185,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	}
 
 	email.OAuthGmailService()
-	_, err := email.SendEmailOAUTH2(reqVote.Email, data, "template.txt")
+	_, err = email.SendEmailOAUTH2(reqVote.Email, data, "template.txt")
 	if err != nil {
 		voteRes.Msg = "Error sending email"
 		w.Header().Set("Content-Type", "application/json")
@@ -172,6 +198,31 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		return
 	}
 
+	token, err := jwt.CreateToken(24*time.Hour, vote.ID, os.Getenv("PRIVATE_KEY"), os.Getenv("PUBLIC_KEY"))
+	if err != nil {
+		voteRes.Msg = "Error creating token"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		err := json.NewEncoder(w).Encode(voteRes)
+		if err != nil {
+			fmt.Println("[PostVote] Error encoding JSON")
+			return
+		}
+		return
+	}
+
+	tokenCookie := http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Expires:  time.Now().Add(24 * time.Hour),
+		HttpOnly: true,
+		Domain:   os.Getenv("DOMAIN"),
+		Secure:   true,
+		SameSite: http.SameSiteNoneMode,
+		Path:     "/",
+	}
+
+	http.SetCookie(w, &tokenCookie)
 	voteRes.Msg = "Successfully voted"
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
