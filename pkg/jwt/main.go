@@ -108,8 +108,14 @@ func ValidateToken(token string, publicKey string) (uint, error) {
 
 func CheckCookie(r *http.Request) (uint, error) {
 	cookie, err := r.Cookie("vote")
+	// check if err is ErrNoCookie
 	if err != nil {
-		return 0, err
+		if err == http.ErrNoCookie {
+			return 0, nil
+		} else {
+			fmt.Println("Error at cookie: ", err)
+			return 0, err
+		}
 	}
 	token := cookie.Value
 

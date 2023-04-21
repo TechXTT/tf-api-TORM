@@ -212,7 +212,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	}
 
 	tokenCookie := http.Cookie{
-		Name:     "token",
+		Name:     "vote",
 		Value:    token,
 		Expires:  time.Now().Add(24 * time.Hour),
 		HttpOnly: true,
