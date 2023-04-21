@@ -3,12 +3,15 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"net/http/pprof"
 
 	project "github.com/hacktues-9/tf-api/cmd/projects"
 	votes "github.com/hacktues-9/tf-api/cmd/votes"
 	database "github.com/hacktues-9/tf-api/pkg/database"
+	"github.com/rs/cors"
 
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
@@ -19,8 +22,32 @@ type Router struct {
 	DB     *gorm.DB
 }
 
+func LimitRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		allowedDomains := []string{"tuesfest.bg", "*.tuesfest.bg", "*.vercel.app"}
+
+		reqDomain := strings.Split(r.Host, ":")[0]
+
+		for _, domain := range allowedDomains {
+			if matched, _ := filepath.Match(domain, reqDomain); matched {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		http.Error(w, "Forbidden", http.StatusForbidden)
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func NewRouter(db *gorm.DB) *Router {
 	r := mux.NewRouter().PathPrefix("/v1").Subrouter().StrictSlash(true)
+
+	r.Use(mux.CORSMethodMiddleware(r))
+	r.Use(LimitRequest)
+
 	return &Router{r, db}
 }
 
@@ -114,11 +141,19 @@ func (r *Router) Run() {
 	r.Database()
 	r.Projects()
 	r.Votes()
-	r.Pprof()
 	r.Init()
 	fmt.Println("Routes initialized")
 
-	err := http.ListenAndServe(":8080", r)
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"https://tuesfest.bg", "https://tuesfest.bg/", "https://*.tuesfest.bg", "https://*.tuesfest.bg/", "https://*.vercel.app", "https://*.vercel.app/"},
+		AllowCredentials: true,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+	})
+
+	handler := c.Handler(r)
+
+	err := http.ListenAndServe(":8080", handler)
 	if err != nil {
 		fmt.Println(err)
 		return
