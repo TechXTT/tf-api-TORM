@@ -23,7 +23,7 @@ func PostVote(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 
 	sub, err := jwt.CheckCookie(r)
 	if err != nil {
-		voteRes.Msg = "Invalid token"
+		voteRes.Msg = "Already voted"
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		err := json.NewEncoder(w).Encode(voteRes)
