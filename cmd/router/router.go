@@ -10,16 +10,15 @@ import (
 
 	project "github.com/hacktues-9/tf-api/cmd/projects"
 	votes "github.com/hacktues-9/tf-api/cmd/votes"
-	database "github.com/hacktues-9/tf-api/pkg/database"
+	"github.com/hacktues-9/tf-api/models"
 	"github.com/rs/cors"
 
 	"github.com/gorilla/mux"
-	"gorm.io/gorm"
 )
 
 type Router struct {
 	router *mux.Router
-	DB     *gorm.DB
+	client *models.Client
 }
 
 func LimitRequest(next http.Handler) http.Handler {
@@ -42,13 +41,13 @@ func LimitRequest(next http.Handler) http.Handler {
 	})
 }
 
-func NewRouter(db *gorm.DB) *Router {
+func NewRouter(client *models.Client) *Router {
 	r := mux.NewRouter().PathPrefix("/v1").Subrouter().StrictSlash(true)
 
 	r.Use(mux.CORSMethodMiddleware(r))
 	r.Use(LimitRequest)
 
-	return &Router{r, db}
+	return &Router{r, client}
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -59,8 +58,8 @@ func (r *Router) GetRouter() *mux.Router {
 	return r.router
 }
 
-func (r *Router) GetDB() *gorm.DB {
-	return r.DB
+func (r *Router) GetDB() *models.Client {
+	return r.client
 }
 
 func (r *Router) Init() {
@@ -94,15 +93,15 @@ func (r *Router) Projects() {
 	GetReq := router.PathPrefix("/get").Subrouter().StrictSlash(true)
 	GetReq.HandleFunc("/projects", func(writer http.ResponseWriter, request *http.Request) {
 		// call function GetProjects from projects package
-		project.GetProjects(writer, request, r.GetDB())
+		project.GetProjectsTorm(writer, request, r.GetDB())
 	}).Methods("GET")
 	GetReq.HandleFunc("/project/{id}", func(writer http.ResponseWriter, request *http.Request) {
 		// call function GetProject from projects package
-		project.GetProject(writer, request, r.GetDB())
+		project.GetProjectTorm(writer, request, r.GetDB())
 	}).Methods("GET")
 	GetReq.HandleFunc("/projects/{category}", func(writer http.ResponseWriter, request *http.Request) {
 		// call function GetProjectsByCategory from projects package
-		project.GetProjectsByCategory(writer, request, r.GetDB())
+		project.GetProjectsByCategoryTorm(writer, request, r.GetDB())
 	}).Methods("GET")
 }
 
@@ -112,33 +111,34 @@ func (r *Router) Votes() {
 	UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
 	PostReq.HandleFunc("/vote", func(writer http.ResponseWriter, request *http.Request) {
 		// call function PostVote from projects package
-		votes.PostVote(writer, request, r.GetDB())
+		votes.PostVoteTorm(writer, request, r.GetDB())
 	}).Methods("POST")
 	UpdateReq.HandleFunc("/verify_vote", func(writer http.ResponseWriter, request *http.Request) {
 		// call function VerifyVote from projects package
-		votes.VerifyVote(writer, request, r.GetDB())
+		votes.VerifyVoteTorm(writer, request, r.GetDB())
 	}).Methods("PUT")
 }
 
-func (r *Router) Database() {
-	router := r.GetRouter()
-	AdminReq := router.PathPrefix("/admin").Subrouter().StrictSlash(true)
-	AdminReq.HandleFunc("/init", func(w http.ResponseWriter, req *http.Request) {
-		database.Migrate(r.GetDB())
-		// return response with status code 200 and message "Database initialized"
-		w.Write([]byte("Database initialized"))
-		w.WriteHeader(http.StatusOK)
-	}).Methods("GET")
-	AdminReq.HandleFunc("/drop", func(w http.ResponseWriter, req *http.Request) {
-		database.Drop(r.GetDB())
-		// return response with status code 200 and message "Database dropped"
-		w.Write([]byte("Database dropped"))
-		w.WriteHeader(http.StatusOK)
-	}).Methods("GET")
-}
+// Already implemented in the database package, so no need to implement it here
+// func (r *Router) Database() {
+// 	router := r.GetRouter()
+// 	AdminReq := router.PathPrefix("/admin").Subrouter().StrictSlash(true)
+// 	AdminReq.HandleFunc("/init", func(w http.ResponseWriter, req *http.Request) {
+// 		database.Migrate(r.GetDB())
+// 		// return response with status code 200 and message "Database initialized"
+// 		w.Write([]byte("Database initialized"))
+// 		w.WriteHeader(http.StatusOK)
+// 	}).Methods("GET")
+// 	AdminReq.HandleFunc("/drop", func(w http.ResponseWriter, req *http.Request) {
+// 		database.Drop(r.GetDB())
+// 		// return response with status code 200 and message "Database dropped"
+// 		w.Write([]byte("Database dropped"))
+// 		w.WriteHeader(http.StatusOK)
+// 	}).Methods("GET")
+// }
 
 func (r *Router) Run() {
-	r.Database()
+	// r.Database()
 	r.Projects()
 	r.Votes()
 	r.Init()
