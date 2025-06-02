@@ -1,0 +1,5 @@
+DROP INDEX IF EXISTS idx_vote_1;
+DROP INDEX IF EXISTS idx_vote_2;
+DROP INDEX IF EXISTS idx_vote_3;
+DROP INDEX IF EXISTS idx_vote_4;
+DROP TABLE vote;

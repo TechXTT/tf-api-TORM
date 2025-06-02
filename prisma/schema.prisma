@@ -1,0 +1,123 @@
+// schema.prisma
+
+// Datasource: Postgres database connection (adjust URL as needed)
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+// Generator: Prisma Client for Go (using the Go Prisma Client)
+generator client {
+    provider = "github.com/TechXTT/TORM"
+}
+
+// Enums for constrained fields in Projects
+enum ProjectType {
+    diploma
+    class
+    extra
+}
+
+enum Category {
+    software
+    networks
+    embedded
+    battlebot
+}
+
+// Projects table (formerly GORM: Projects)
+model Project {
+    id        Int       @id @default(autoincrement())
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
+    deletedAt DateTime? // Soft delete
+
+    name         String
+    description  String? // Optional
+    type         ProjectType
+    category     Category
+    mentor       String? // Optional
+    videoLink    String? // Optional
+    hasThumbnail Boolean     @default(false)
+    demoLink     String? // Optional
+    githubLink   String? // Optional
+
+    // Relations
+    creator   Creator? @relation
+    creatorId Int? // A project may or may not have an assigned creator
+
+    pictures         Picture[]
+    votesAsNetwork   Vote[]    @relation("VoteNetworks")
+    votesAsSoftware  Vote[]    @relation("VoteSoftware")
+    votesAsEmbedded  Vote[]    @relation("VoteEmbedded")
+    votesAsBattleBot Vote[]    @relation("VoteBattleBot")
+
+    @@index([type])
+    @@index([category])
+}
+
+// Creators table (formerly GORM: Creators)
+model Creator {
+    id        Int       @id @default(autoincrement())
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
+    deletedAt DateTime?
+
+    name  String
+    email String  @unique
+    phone String?
+    grade Int // Valid values: 8,9,10,11,12 (enforced externally)
+    class String // Valid values: 'А', 'Б', 'В', 'Г' (enforced externally)
+
+    project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+    projectId Int     @unique
+
+    @@index([grade])
+    @@index([class])
+}
+
+// Pictures table (formerly GORM: Pictures)
+model Picture {
+    id        Int       @id @default(autoincrement())
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
+    deletedAt DateTime?
+
+    url         String  @unique
+    isThumbnail Boolean @default(false)
+
+    project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+    projectId Int
+
+    @@index([projectId])
+}
+
+// Votes table (formerly GORM: Votes)
+model Vote {
+    id        Int       @id @default(autoincrement())
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
+    deletedAt DateTime?
+
+    name     String  @unique
+    email    String  @unique
+    verified Boolean @default(false)
+
+    // Each vote references four project categories:
+    networks   Project @relation("VoteNetworks", fields: [networksId], references: [id], onDelete: Cascade)
+    networksId Int
+
+    software   Project @relation("VoteSoftware", fields: [softwareId], references: [id], onDelete: Cascade)
+    softwareId Int
+
+    embedded   Project @relation("VoteEmbedded", fields: [embeddedId], references: [id], onDelete: Cascade)
+    embeddedId Int
+
+    battleBot   Project @relation("VoteBattleBot", fields: [battleBotId], references: [id], onDelete: Cascade)
+    battleBotId Int
+
+    @@index([networksId])
+    @@index([softwareId])
+    @@index([embeddedId])
+    @@index([battleBotId])
+}
