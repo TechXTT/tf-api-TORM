@@ -16,5 +16,5 @@ type Creator struct {
 	Phone     string
 	Grade     int
 	Class     string
-	ProjectId int
+	Project   []Project
 }

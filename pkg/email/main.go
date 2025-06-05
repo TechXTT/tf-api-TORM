@@ -18,7 +18,7 @@ import (
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
 
-	jwt "github.com/hacktues-9/tf-api/pkg/jwt"
+	jwt "github.com/TechXTT/tf-api-TORM/pkg/jwt"
 )
 
 type Body struct {
@@ -157,7 +157,7 @@ func GenerateVerificationLink(email string, privateKey string, publicKey string,
 		fmt.Println("Error creating token: ", err)
 		return ""
 	}
-	return fmt.Sprintf("https://tuesfest.bg/verify/%s", token)
+	return fmt.Sprintf("http://localhost:3000/verify/%s", token)
 }
 
 func ValidateEmailToken(token string) (string, error) {

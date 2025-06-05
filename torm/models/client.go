@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -60,6 +62,63 @@ func (c *Client) connect() (*sql.DB, error) {
 	return c.db, c.err
 }
 
+// TimeOrZero implements sql.Scanner for time.Time fields, converting NULL to zero time.
+type TimeOrZero time.Time
+
+// Scan implements the sql.Scanner interface.
+func (t *TimeOrZero) Scan(value interface{}) error {
+	if value == nil {
+		*t = TimeOrZero(time.Time{})
+		return nil
+	}
+	tm, ok := value.(time.Time)
+	if !ok {
+		return fmt.Errorf("cannot scan type %T into TimeOrZero", value)
+	}
+	*t = TimeOrZero(tm)
+	return nil
+}
+
+// scanDest returns a slice of destination pointers for scanning into struct fields.
+// It substitutes sql.NullString for any string field, and TimeOrZero for any time.Time field.
+func scanDest(m interface{}) []interface{} {
+	v := reflect.ValueOf(m)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return nil
+	}
+	v = v.Elem()
+	if v.Kind() != reflect.Struct {
+		return nil
+	}
+
+	var dest []interface{}
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		fieldType := field.Type()
+
+		switch fieldType {
+		case reflect.TypeOf(time.Time{}):
+			// Use a TimeOrZero placeholder
+			var tmp TimeOrZero
+			dest = append(dest, &tmp)
+
+		case reflect.TypeOf(""):
+			// Use a sql.NullString placeholder instead of a bare string
+			var tmp sql.NullString
+			dest = append(dest, &tmp)
+
+		default:
+			if field.CanAddr() {
+				dest = append(dest, field.Addr().Interface())
+			} else {
+				var dummy interface{}
+				dest = append(dest, &dummy)
+			}
+		}
+	}
+	return dest
+}
+
 // ProjectService provides DB operations for the Project model.
 type ProjectService struct {
 	db *sql.DB
@@ -77,16 +136,263 @@ func (c *Client) ProjectService() (*ProjectService, error) {
 // FindUnique retrieves a single Project by unique filter.
 func (svc *ProjectService) FindUnique(ctx context.Context, where map[string]interface{}) (*Project, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
+	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", strings.Join(cols, ", "), "project", whereClause)
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Project
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
+	// load many-to-many Creator via join table creator_project
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
+		rowscreators, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf(
+				"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+				strings.Join(colsRel, ", "),
+				"creator",
+				"creator_project",
+				"creator",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowscreators.Close()
+			for rowscreators.Next() {
+				var related Creator
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowscreators.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Creators = append(m.Creators, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Picture
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
+		rowspictures, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"picture",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowspictures.Close()
+			for rowspictures.Next() {
+				var related Picture
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowspictures.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Pictures = append(m.Pictures, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsNetwork, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsNetwork.Close()
+			for rowsvotesAsNetwork.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsNetwork.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsNetwork = append(m.VotesAsNetwork, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsSoftware, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsSoftware.Close()
+			for rowsvotesAsSoftware.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsSoftware.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsSoftware = append(m.VotesAsSoftware, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsEmbedded, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsEmbedded.Close()
+			for rowsvotesAsEmbedded.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsEmbedded.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsEmbedded = append(m.VotesAsEmbedded, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsBattleBot, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsBattleBot.Close()
+			for rowsvotesAsBattleBot.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsBattleBot.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsBattleBot = append(m.VotesAsBattleBot, related)
+				}
+			}
+		}
 	}
 	return &m, nil
 }
@@ -106,7 +412,7 @@ func (svc *ProjectService) FindUniqueOrThrow(ctx context.Context, where map[stri
 // FindFirst retrieves a single Project matching filters, or nil if none.
 func (svc *ProjectService) FindFirst(ctx context.Context, where map[string]interface{}) (*Project, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
+	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "project")
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -114,11 +420,258 @@ func (svc *ProjectService) FindFirst(ctx context.Context, where map[string]inter
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Project
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
+	// load many-to-many Creator via join table creator_project
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
+		rowscreators, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf(
+				"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+				strings.Join(colsRel, ", "),
+				"creator",
+				"creator_project",
+				"creator",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowscreators.Close()
+			for rowscreators.Next() {
+				var related Creator
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowscreators.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Creators = append(m.Creators, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Picture
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
+		rowspictures, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"picture",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowspictures.Close()
+			for rowspictures.Next() {
+				var related Picture
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowspictures.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Pictures = append(m.Pictures, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsNetwork, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsNetwork.Close()
+			for rowsvotesAsNetwork.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsNetwork.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsNetwork = append(m.VotesAsNetwork, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsSoftware, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsSoftware.Close()
+			for rowsvotesAsSoftware.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsSoftware.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsSoftware = append(m.VotesAsSoftware, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsEmbedded, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsEmbedded.Close()
+			for rowsvotesAsEmbedded.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsEmbedded.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsEmbedded = append(m.VotesAsEmbedded, related)
+				}
+			}
+		}
+	}
+	// one-to-many load of Vote
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		rowsvotesAsBattleBot, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+				strings.Join(colsRel, ", "),
+				"vote",
+				"project",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsvotesAsBattleBot.Close()
+			for rowsvotesAsBattleBot.Next() {
+				var related Vote
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsvotesAsBattleBot.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.VotesAsBattleBot = append(m.VotesAsBattleBot, related)
+				}
+			}
+		}
 	}
 	return &m, nil
 }
@@ -138,35 +691,296 @@ func (svc *ProjectService) FindFirstOrThrow(ctx context.Context, where map[strin
 // FindMany retrieves multiple Project records matching filters.
 func (svc *ProjectService) FindMany(ctx context.Context, where map[string]interface{}, orderBy []string, skip, take int) ([]*Project, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "project")
-	if whereClause != "" {
-		query += " WHERE " + whereClause
-	}
-	if len(orderBy) > 0 {
-		query += " ORDER BY " + strings.Join(orderBy, ", ")
-	}
-	if take > 0 {
-		query += fmt.Sprintf(" LIMIT %d", take)
-	}
-	if skip > 0 {
-		query += fmt.Sprintf(" OFFSET %d", skip)
-	}
-	rows, err := svc.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []*Project
-	for rows.Next() {
-		var m Project
-		dest := scanDest(&m)
-		if err := rows.Scan(dest...); err != nil {
+	{
+		cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
+		query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "project")
+		if whereClause != "" {
+			query += " WHERE " + whereClause
+		}
+		if len(orderBy) > 0 {
+			query += " ORDER BY " + strings.Join(orderBy, ", ")
+		}
+		if take > 0 {
+			query += fmt.Sprintf(" LIMIT %d", take)
+		}
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d", skip)
+		}
+		rows, err := svc.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, &m)
+		defer rows.Close()
+		var result []*Project
+		for rows.Next() {
+			var m Project
+			dest := scanDest(&m)
+			dest = dest[:len(cols)] // Ensure we only scan expected columns
+			if err := rows.Scan(dest...); err != nil {
+				return nil, err
+			}
+			structVal := reflect.ValueOf(&m).Elem()
+			for i := 0; i < len(cols); i++ {
+				switch placeholder := dest[i].(type) {
+				case *sql.NullString:
+					if placeholder.Valid {
+						structVal.Field(i).SetString(placeholder.String)
+					} else {
+						structVal.Field(i).SetString("")
+					}
+				case *TimeOrZero:
+					t := time.Time(*placeholder)
+					structVal.Field(i).Set(reflect.ValueOf(t))
+				}
+			}
+			// Load one‐level relations
+			// load many-to-many Creator via join table creator_project
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
+				rowscreators, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf(
+						"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+						strings.Join(colsRel, ", "),
+						"creator",
+						"creator_project",
+						"creator",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowscreators.Close()
+					for rowscreators.Next() {
+						var related Creator
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowscreators.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.Creators = append(m.Creators, related)
+						} else {
+							fmt.Println("Error scanning Creator:", err)
+						}
+					}
+				}
+			}
+			// one-to-many load of Picture
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
+				rowspictures, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+						strings.Join(colsRel, ", "),
+						"picture",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowspictures.Close()
+					for rowspictures.Next() {
+						var related Picture
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowspictures.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.Pictures = append(m.Pictures, related)
+						} else {
+							fmt.Println("Error scanning Picture:", err)
+						}
+					}
+				}
+			}
+			// one-to-many load of Vote
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+				rowsvotesAsNetwork, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+						strings.Join(colsRel, ", "),
+						"vote",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowsvotesAsNetwork.Close()
+					for rowsvotesAsNetwork.Next() {
+						var related Vote
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowsvotesAsNetwork.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.VotesAsNetwork = append(m.VotesAsNetwork, related)
+						} else {
+							fmt.Println("Error scanning Vote:", err)
+						}
+					}
+				}
+			}
+			// one-to-many load of Vote
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+				rowsvotesAsSoftware, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+						strings.Join(colsRel, ", "),
+						"vote",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowsvotesAsSoftware.Close()
+					for rowsvotesAsSoftware.Next() {
+						var related Vote
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowsvotesAsSoftware.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.VotesAsSoftware = append(m.VotesAsSoftware, related)
+						} else {
+							fmt.Println("Error scanning Vote:", err)
+						}
+					}
+				}
+			}
+			// one-to-many load of Vote
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+				rowsvotesAsEmbedded, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+						strings.Join(colsRel, ", "),
+						"vote",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowsvotesAsEmbedded.Close()
+					for rowsvotesAsEmbedded.Next() {
+						var related Vote
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowsvotesAsEmbedded.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.VotesAsEmbedded = append(m.VotesAsEmbedded, related)
+						} else {
+							fmt.Println("Error scanning Vote:", err)
+						}
+					}
+				}
+			}
+			// one-to-many load of Vote
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+				rowsvotesAsBattleBot, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf("SELECT %s FROM %s WHERE %sid = $1",
+						strings.Join(colsRel, ", "),
+						"vote",
+						"project",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowsvotesAsBattleBot.Close()
+					for rowsvotesAsBattleBot.Next() {
+						var related Vote
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowsvotesAsBattleBot.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.VotesAsBattleBot = append(m.VotesAsBattleBot, related)
+						} else {
+							fmt.Println("Error scanning Vote:", err)
+						}
+					}
+				}
+			}
+			result = append(result, &m)
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
 // Create inserts a new Project record and updates the passed model with any returned values.
@@ -185,20 +999,41 @@ func (svc *ProjectService) Create(ctx context.Context, m *Project) error {
 	data["hasthumbnail"] = m.HasThumbnail
 	data["demolink"] = m.DemoLink
 	data["githublink"] = m.GithubLink
-	data["creatorid"] = m.CreatorId
+
+	// Remove empty string entries so they won't be inserted
+	for k, v := range data {
+		if str, ok := v.(string); ok {
+			if str == "" {
+				delete(data, k)
+			}
+		}
+	}
 
 	cols, placeholders, args := buildInsert(data)
 	colsList := strings.Join(cols, ", ")
 	phList := strings.Join(placeholders, ", ")
 	// Return all columns to repopulate the struct
-	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
+	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s", "project", colsList, phList, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
-	// Scan returned values back into the struct fields
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -219,19 +1054,31 @@ func (svc *ProjectService) Update(ctx context.Context, where map[string]interfac
 	data["hasthumbnail"] = m.HasThumbnail
 	data["demolink"] = m.DemoLink
 	data["githublink"] = m.GithubLink
-	data["creatorid"] = m.CreatorId
 
 	setClause, setArgs := buildSet(data, 1)
 	whereClause, whereArgs := buildWhereOffset(where, len(setArgs)+1)
 	args := append(setArgs, whereArgs...)
-	// Return all columns to repopulate the struct
-	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
+	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "project", setClause, whereClause, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -242,20 +1089,17 @@ func (svc *ProjectService) Upsert(ctx context.Context, where map[string]interfac
 	if err != nil {
 		return err
 	}
-	// Check existence
 	existing, err := svc.FindUnique(ctx, where)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	if existing == nil {
-		// Create a new record
 		if err := svc.Create(ctx, m); err != nil {
 			tx.Rollback()
 			return err
 		}
 	} else {
-		// Update existing record; ensure primary key is set on m if needed
 		if err := svc.Update(ctx, where, m); err != nil {
 			tx.Rollback()
 			return err
@@ -324,7 +1168,6 @@ func (svc *ProjectService) UpdateMany(ctx context.Context, where []map[string]in
 	var totalAffected int64 = 0
 	for i, m := range ms {
 		filter := where[i]
-		// Extract new values from the struct into a map
 		data := make(map[string]interface{})
 		data["createdat"] = m.CreatedAt
 		data["updatedat"] = m.UpdatedAt
@@ -338,19 +1181,31 @@ func (svc *ProjectService) UpdateMany(ctx context.Context, where []map[string]in
 		data["hasthumbnail"] = m.HasThumbnail
 		data["demolink"] = m.DemoLink
 		data["githublink"] = m.GithubLink
-		data["creatorid"] = m.CreatorId
 
 		setClause, setArgs := buildSet(data, 1)
 		whereClause, whereArgs := buildWhereOffset(filter, len(setArgs)+1)
 		args := append(setArgs, whereArgs...)
-		// Return all columns to repopulate the struct
-		allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink", "creatorid"}
+		allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
 		query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "project", setClause, whereClause, strings.Join(allCols, ", "))
 		row := svc.db.QueryRowContext(ctx, query, args...)
 
 		dest := scanDest(m)
 		if err := row.Scan(dest...); err != nil {
 			return totalAffected, err
+		}
+		structVal := reflect.ValueOf(m).Elem()
+		for i := 0; i < structVal.NumField(); i++ {
+			switch placeholder := dest[i].(type) {
+			case *sql.NullString:
+				if placeholder.Valid {
+					structVal.Field(i).SetString(placeholder.String)
+				} else {
+					structVal.Field(i).SetString("")
+				}
+			case *TimeOrZero:
+				t := time.Time(*placeholder)
+				structVal.Field(i).Set(reflect.ValueOf(t))
+			}
 		}
 		totalAffected++
 	}
@@ -370,7 +1225,6 @@ func (svc *ProjectService) DeleteMany(ctx context.Context, where map[string]inte
 
 // Aggregate computes SQL aggregates for Project.
 func (svc *ProjectService) Aggregate(ctx context.Context, where map[string]interface{}, agg map[string][]string) (map[string]interface{}, error) {
-	// agg keys: "_count", "_avg", "_sum", "_min", "_max"
 	selectClauses := []string{}
 	for key, fields := range agg {
 		for _, f := range fields {
@@ -383,7 +1237,6 @@ func (svc *ProjectService) Aggregate(ctx context.Context, where map[string]inter
 		query += " WHERE " + whereClause
 	}
 	row := svc.db.QueryRowContext(ctx, query, args...)
-	// Scan into generic map
 	cols := strings.Split(strings.Join(selectClauses, ", "), ", ")
 	vals := make([]interface{}, len(cols))
 	result := map[string]interface{}{}
@@ -463,16 +1316,73 @@ func (c *Client) CreatorService() (*CreatorService, error) {
 // FindUnique retrieves a single Creator by unique filter.
 func (svc *CreatorService) FindUnique(ctx context.Context, where map[string]interface{}) (*Creator, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
+	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", strings.Join(cols, ", "), "creator", whereClause)
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Creator
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
+	// load many-to-many Project via join table creator_project
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
+		rowsProject, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf(
+				"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+				strings.Join(colsRel, ", "),
+				"project",
+				"creator_project",
+				"project",
+				"creator",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsProject.Close()
+			for rowsProject.Next() {
+				var related Project
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsProject.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Project = append(m.Project, related)
+				}
+			}
+		}
 	}
 	return &m, nil
 }
@@ -492,7 +1402,7 @@ func (svc *CreatorService) FindUniqueOrThrow(ctx context.Context, where map[stri
 // FindFirst retrieves a single Creator matching filters, or nil if none.
 func (svc *CreatorService) FindFirst(ctx context.Context, where map[string]interface{}) (*Creator, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
+	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "creator")
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -500,11 +1410,68 @@ func (svc *CreatorService) FindFirst(ctx context.Context, where map[string]inter
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Creator
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
+	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
+	// load many-to-many Project via join table creator_project
+	{
+		colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
+		rowsProject, err := svc.db.QueryContext(ctx,
+			fmt.Sprintf(
+				"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+				strings.Join(colsRel, ", "),
+				"project",
+				"creator_project",
+				"project",
+				"creator",
+			),
+			m.Id,
+		)
+		if err == nil {
+			defer rowsProject.Close()
+			for rowsProject.Next() {
+				var related Project
+				destRel := scanDest(&related)
+				destRel = destRel[:len(colsRel)]
+				if err := rowsProject.Scan(destRel...); err == nil {
+					// Copy scanned values into struct fields
+					structValRel := reflect.ValueOf(&related).Elem()
+					for i := 0; i < len(colsRel); i++ {
+						switch placeholder := destRel[i].(type) {
+						case *sql.NullString:
+							if placeholder.Valid {
+								structValRel.Field(i).SetString(placeholder.String)
+							} else {
+								structValRel.Field(i).SetString("")
+							}
+						case *TimeOrZero:
+							t := time.Time(*placeholder)
+							structValRel.Field(i).Set(reflect.ValueOf(t))
+						}
+					}
+					m.Project = append(m.Project, related)
+				}
+			}
+		}
 	}
 	return &m, nil
 }
@@ -524,35 +1491,96 @@ func (svc *CreatorService) FindFirstOrThrow(ctx context.Context, where map[strin
 // FindMany retrieves multiple Creator records matching filters.
 func (svc *CreatorService) FindMany(ctx context.Context, where map[string]interface{}, orderBy []string, skip, take int) ([]*Creator, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "creator")
-	if whereClause != "" {
-		query += " WHERE " + whereClause
-	}
-	if len(orderBy) > 0 {
-		query += " ORDER BY " + strings.Join(orderBy, ", ")
-	}
-	if take > 0 {
-		query += fmt.Sprintf(" LIMIT %d", take)
-	}
-	if skip > 0 {
-		query += fmt.Sprintf(" OFFSET %d", skip)
-	}
-	rows, err := svc.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []*Creator
-	for rows.Next() {
-		var m Creator
-		dest := scanDest(&m)
-		if err := rows.Scan(dest...); err != nil {
+	{
+		cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
+		query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "creator")
+		if whereClause != "" {
+			query += " WHERE " + whereClause
+		}
+		if len(orderBy) > 0 {
+			query += " ORDER BY " + strings.Join(orderBy, ", ")
+		}
+		if take > 0 {
+			query += fmt.Sprintf(" LIMIT %d", take)
+		}
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d", skip)
+		}
+		rows, err := svc.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, &m)
+		defer rows.Close()
+		var result []*Creator
+		for rows.Next() {
+			var m Creator
+			dest := scanDest(&m)
+			dest = dest[:len(cols)] // Ensure we only scan expected columns
+			if err := rows.Scan(dest...); err != nil {
+				return nil, err
+			}
+			structVal := reflect.ValueOf(&m).Elem()
+			for i := 0; i < len(cols); i++ {
+				switch placeholder := dest[i].(type) {
+				case *sql.NullString:
+					if placeholder.Valid {
+						structVal.Field(i).SetString(placeholder.String)
+					} else {
+						structVal.Field(i).SetString("")
+					}
+				case *TimeOrZero:
+					t := time.Time(*placeholder)
+					structVal.Field(i).Set(reflect.ValueOf(t))
+				}
+			}
+			// Load one‐level relations
+			// load many-to-many Project via join table creator_project
+			{
+				colsRel := []string{"id", "createdat", "updatedat", "deletedat", "name", "description", "type", "category", "mentor", "videolink", "hasthumbnail", "demolink", "githublink"}
+				rowsProject, err := svc.db.QueryContext(ctx,
+					fmt.Sprintf(
+						"SELECT %s FROM %s t JOIN %s jt ON t.id = jt.%s_id WHERE jt.%s_id = $1",
+						strings.Join(colsRel, ", "),
+						"project",
+						"creator_project",
+						"project",
+						"creator",
+					),
+					m.Id,
+				)
+				if err == nil {
+					defer rowsProject.Close()
+					for rowsProject.Next() {
+						var related Project
+						destRel := scanDest(&related)
+						destRel = destRel[:len(colsRel)]
+						if err := rowsProject.Scan(destRel...); err == nil {
+							// Copy scanned values into struct fields
+							structValRel := reflect.ValueOf(&related).Elem()
+							for i := 0; i < len(colsRel); i++ {
+								switch placeholder := destRel[i].(type) {
+								case *sql.NullString:
+									if placeholder.Valid {
+										structValRel.Field(i).SetString(placeholder.String)
+									} else {
+										structValRel.Field(i).SetString("")
+									}
+								case *TimeOrZero:
+									t := time.Time(*placeholder)
+									structValRel.Field(i).Set(reflect.ValueOf(t))
+								}
+							}
+							m.Project = append(m.Project, related)
+						} else {
+							fmt.Println("Error scanning Project:", err)
+						}
+					}
+				}
+			}
+			result = append(result, &m)
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
 // Create inserts a new Creator record and updates the passed model with any returned values.
@@ -567,20 +1595,41 @@ func (svc *CreatorService) Create(ctx context.Context, m *Creator) error {
 	data["phone"] = m.Phone
 	data["grade"] = m.Grade
 	data["class"] = m.Class
-	data["projectid"] = m.ProjectId
+
+	// Remove empty string entries so they won't be inserted
+	for k, v := range data {
+		if str, ok := v.(string); ok {
+			if str == "" {
+				delete(data, k)
+			}
+		}
+	}
 
 	cols, placeholders, args := buildInsert(data)
 	colsList := strings.Join(cols, ", ")
 	phList := strings.Join(placeholders, ", ")
 	// Return all columns to repopulate the struct
-	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
+	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s", "creator", colsList, phList, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
-	// Scan returned values back into the struct fields
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -597,19 +1646,31 @@ func (svc *CreatorService) Update(ctx context.Context, where map[string]interfac
 	data["phone"] = m.Phone
 	data["grade"] = m.Grade
 	data["class"] = m.Class
-	data["projectid"] = m.ProjectId
 
 	setClause, setArgs := buildSet(data, 1)
 	whereClause, whereArgs := buildWhereOffset(where, len(setArgs)+1)
 	args := append(setArgs, whereArgs...)
-	// Return all columns to repopulate the struct
-	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
+	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "creator", setClause, whereClause, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -620,20 +1681,17 @@ func (svc *CreatorService) Upsert(ctx context.Context, where map[string]interfac
 	if err != nil {
 		return err
 	}
-	// Check existence
 	existing, err := svc.FindUnique(ctx, where)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	if existing == nil {
-		// Create a new record
 		if err := svc.Create(ctx, m); err != nil {
 			tx.Rollback()
 			return err
 		}
 	} else {
-		// Update existing record; ensure primary key is set on m if needed
 		if err := svc.Update(ctx, where, m); err != nil {
 			tx.Rollback()
 			return err
@@ -702,7 +1760,6 @@ func (svc *CreatorService) UpdateMany(ctx context.Context, where []map[string]in
 	var totalAffected int64 = 0
 	for i, m := range ms {
 		filter := where[i]
-		// Extract new values from the struct into a map
 		data := make(map[string]interface{})
 		data["createdat"] = m.CreatedAt
 		data["updatedat"] = m.UpdatedAt
@@ -712,19 +1769,31 @@ func (svc *CreatorService) UpdateMany(ctx context.Context, where []map[string]in
 		data["phone"] = m.Phone
 		data["grade"] = m.Grade
 		data["class"] = m.Class
-		data["projectid"] = m.ProjectId
 
 		setClause, setArgs := buildSet(data, 1)
 		whereClause, whereArgs := buildWhereOffset(filter, len(setArgs)+1)
 		args := append(setArgs, whereArgs...)
-		// Return all columns to repopulate the struct
-		allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class", "projectid"}
+		allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "phone", "grade", "class"}
 		query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "creator", setClause, whereClause, strings.Join(allCols, ", "))
 		row := svc.db.QueryRowContext(ctx, query, args...)
 
 		dest := scanDest(m)
 		if err := row.Scan(dest...); err != nil {
 			return totalAffected, err
+		}
+		structVal := reflect.ValueOf(m).Elem()
+		for i := 0; i < structVal.NumField(); i++ {
+			switch placeholder := dest[i].(type) {
+			case *sql.NullString:
+				if placeholder.Valid {
+					structVal.Field(i).SetString(placeholder.String)
+				} else {
+					structVal.Field(i).SetString("")
+				}
+			case *TimeOrZero:
+				t := time.Time(*placeholder)
+				structVal.Field(i).Set(reflect.ValueOf(t))
+			}
 		}
 		totalAffected++
 	}
@@ -744,7 +1813,6 @@ func (svc *CreatorService) DeleteMany(ctx context.Context, where map[string]inte
 
 // Aggregate computes SQL aggregates for Creator.
 func (svc *CreatorService) Aggregate(ctx context.Context, where map[string]interface{}, agg map[string][]string) (map[string]interface{}, error) {
-	// agg keys: "_count", "_avg", "_sum", "_min", "_max"
 	selectClauses := []string{}
 	for key, fields := range agg {
 		for _, f := range fields {
@@ -757,7 +1825,6 @@ func (svc *CreatorService) Aggregate(ctx context.Context, where map[string]inter
 		query += " WHERE " + whereClause
 	}
 	row := svc.db.QueryRowContext(ctx, query, args...)
-	// Scan into generic map
 	cols := strings.Split(strings.Join(selectClauses, ", "), ", ")
 	vals := make([]interface{}, len(cols))
 	result := map[string]interface{}{}
@@ -842,12 +1909,28 @@ func (svc *PictureService) FindUnique(ctx context.Context, where map[string]inte
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Picture
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
 	return &m, nil
 }
 
@@ -874,12 +1957,28 @@ func (svc *PictureService) FindFirst(ctx context.Context, where map[string]inter
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Picture
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
 	return &m, nil
 }
 
@@ -898,35 +1997,53 @@ func (svc *PictureService) FindFirstOrThrow(ctx context.Context, where map[strin
 // FindMany retrieves multiple Picture records matching filters.
 func (svc *PictureService) FindMany(ctx context.Context, where map[string]interface{}, orderBy []string, skip, take int) ([]*Picture, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "picture")
-	if whereClause != "" {
-		query += " WHERE " + whereClause
-	}
-	if len(orderBy) > 0 {
-		query += " ORDER BY " + strings.Join(orderBy, ", ")
-	}
-	if take > 0 {
-		query += fmt.Sprintf(" LIMIT %d", take)
-	}
-	if skip > 0 {
-		query += fmt.Sprintf(" OFFSET %d", skip)
-	}
-	rows, err := svc.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []*Picture
-	for rows.Next() {
-		var m Picture
-		dest := scanDest(&m)
-		if err := rows.Scan(dest...); err != nil {
+	{
+		cols := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
+		query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "picture")
+		if whereClause != "" {
+			query += " WHERE " + whereClause
+		}
+		if len(orderBy) > 0 {
+			query += " ORDER BY " + strings.Join(orderBy, ", ")
+		}
+		if take > 0 {
+			query += fmt.Sprintf(" LIMIT %d", take)
+		}
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d", skip)
+		}
+		rows, err := svc.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, &m)
+		defer rows.Close()
+		var result []*Picture
+		for rows.Next() {
+			var m Picture
+			dest := scanDest(&m)
+			dest = dest[:len(cols)] // Ensure we only scan expected columns
+			if err := rows.Scan(dest...); err != nil {
+				return nil, err
+			}
+			structVal := reflect.ValueOf(&m).Elem()
+			for i := 0; i < len(cols); i++ {
+				switch placeholder := dest[i].(type) {
+				case *sql.NullString:
+					if placeholder.Valid {
+						structVal.Field(i).SetString(placeholder.String)
+					} else {
+						structVal.Field(i).SetString("")
+					}
+				case *TimeOrZero:
+					t := time.Time(*placeholder)
+					structVal.Field(i).Set(reflect.ValueOf(t))
+				}
+			}
+			// Load one‐level relations
+			result = append(result, &m)
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
 // Create inserts a new Picture record and updates the passed model with any returned values.
@@ -940,6 +2057,15 @@ func (svc *PictureService) Create(ctx context.Context, m *Picture) error {
 	data["isthumbnail"] = m.IsThumbnail
 	data["projectid"] = m.ProjectId
 
+	// Remove empty string entries so they won't be inserted
+	for k, v := range data {
+		if str, ok := v.(string); ok {
+			if str == "" {
+				delete(data, k)
+			}
+		}
+	}
+
 	cols, placeholders, args := buildInsert(data)
 	colsList := strings.Join(cols, ", ")
 	phList := strings.Join(placeholders, ", ")
@@ -948,10 +2074,23 @@ func (svc *PictureService) Create(ctx context.Context, m *Picture) error {
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s", "picture", colsList, phList, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
-	// Scan returned values back into the struct fields
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -970,7 +2109,6 @@ func (svc *PictureService) Update(ctx context.Context, where map[string]interfac
 	setClause, setArgs := buildSet(data, 1)
 	whereClause, whereArgs := buildWhereOffset(where, len(setArgs)+1)
 	args := append(setArgs, whereArgs...)
-	// Return all columns to repopulate the struct
 	allCols := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "picture", setClause, whereClause, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
@@ -978,6 +2116,20 @@ func (svc *PictureService) Update(ctx context.Context, where map[string]interfac
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -988,20 +2140,17 @@ func (svc *PictureService) Upsert(ctx context.Context, where map[string]interfac
 	if err != nil {
 		return err
 	}
-	// Check existence
 	existing, err := svc.FindUnique(ctx, where)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	if existing == nil {
-		// Create a new record
 		if err := svc.Create(ctx, m); err != nil {
 			tx.Rollback()
 			return err
 		}
 	} else {
-		// Update existing record; ensure primary key is set on m if needed
 		if err := svc.Update(ctx, where, m); err != nil {
 			tx.Rollback()
 			return err
@@ -1070,7 +2219,6 @@ func (svc *PictureService) UpdateMany(ctx context.Context, where []map[string]in
 	var totalAffected int64 = 0
 	for i, m := range ms {
 		filter := where[i]
-		// Extract new values from the struct into a map
 		data := make(map[string]interface{})
 		data["createdat"] = m.CreatedAt
 		data["updatedat"] = m.UpdatedAt
@@ -1082,7 +2230,6 @@ func (svc *PictureService) UpdateMany(ctx context.Context, where []map[string]in
 		setClause, setArgs := buildSet(data, 1)
 		whereClause, whereArgs := buildWhereOffset(filter, len(setArgs)+1)
 		args := append(setArgs, whereArgs...)
-		// Return all columns to repopulate the struct
 		allCols := []string{"id", "createdat", "updatedat", "deletedat", "url", "isthumbnail", "projectid"}
 		query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "picture", setClause, whereClause, strings.Join(allCols, ", "))
 		row := svc.db.QueryRowContext(ctx, query, args...)
@@ -1090,6 +2237,20 @@ func (svc *PictureService) UpdateMany(ctx context.Context, where []map[string]in
 		dest := scanDest(m)
 		if err := row.Scan(dest...); err != nil {
 			return totalAffected, err
+		}
+		structVal := reflect.ValueOf(m).Elem()
+		for i := 0; i < structVal.NumField(); i++ {
+			switch placeholder := dest[i].(type) {
+			case *sql.NullString:
+				if placeholder.Valid {
+					structVal.Field(i).SetString(placeholder.String)
+				} else {
+					structVal.Field(i).SetString("")
+				}
+			case *TimeOrZero:
+				t := time.Time(*placeholder)
+				structVal.Field(i).Set(reflect.ValueOf(t))
+			}
 		}
 		totalAffected++
 	}
@@ -1109,7 +2270,6 @@ func (svc *PictureService) DeleteMany(ctx context.Context, where map[string]inte
 
 // Aggregate computes SQL aggregates for Picture.
 func (svc *PictureService) Aggregate(ctx context.Context, where map[string]interface{}, agg map[string][]string) (map[string]interface{}, error) {
-	// agg keys: "_count", "_avg", "_sum", "_min", "_max"
 	selectClauses := []string{}
 	for key, fields := range agg {
 		for _, f := range fields {
@@ -1122,7 +2282,6 @@ func (svc *PictureService) Aggregate(ctx context.Context, where map[string]inter
 		query += " WHERE " + whereClause
 	}
 	row := svc.db.QueryRowContext(ctx, query, args...)
-	// Scan into generic map
 	cols := strings.Split(strings.Join(selectClauses, ", "), ", ")
 	vals := make([]interface{}, len(cols))
 	result := map[string]interface{}{}
@@ -1207,12 +2366,28 @@ func (svc *VoteService) FindUnique(ctx context.Context, where map[string]interfa
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Vote
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
 	return &m, nil
 }
 
@@ -1239,12 +2414,28 @@ func (svc *VoteService) FindFirst(ctx context.Context, where map[string]interfac
 	row := svc.db.QueryRowContext(ctx, query, args...)
 	var m Vote
 	dest := scanDest(&m)
+	dest = dest[:len(cols)] // Ensure we only scan expected columns
 	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
+	structVal := reflect.ValueOf(&m).Elem()
+	for i := 0; i < len(cols); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
+	}
+	// Load one‐level relations
 	return &m, nil
 }
 
@@ -1263,35 +2454,53 @@ func (svc *VoteService) FindFirstOrThrow(ctx context.Context, where map[string]i
 // FindMany retrieves multiple Vote records matching filters.
 func (svc *VoteService) FindMany(ctx context.Context, where map[string]interface{}, orderBy []string, skip, take int) ([]*Vote, error) {
 	whereClause, args := buildWhere(where)
-	cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
-	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "vote")
-	if whereClause != "" {
-		query += " WHERE " + whereClause
-	}
-	if len(orderBy) > 0 {
-		query += " ORDER BY " + strings.Join(orderBy, ", ")
-	}
-	if take > 0 {
-		query += fmt.Sprintf(" LIMIT %d", take)
-	}
-	if skip > 0 {
-		query += fmt.Sprintf(" OFFSET %d", skip)
-	}
-	rows, err := svc.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []*Vote
-	for rows.Next() {
-		var m Vote
-		dest := scanDest(&m)
-		if err := rows.Scan(dest...); err != nil {
+	{
+		cols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
+		query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(cols, ", "), "vote")
+		if whereClause != "" {
+			query += " WHERE " + whereClause
+		}
+		if len(orderBy) > 0 {
+			query += " ORDER BY " + strings.Join(orderBy, ", ")
+		}
+		if take > 0 {
+			query += fmt.Sprintf(" LIMIT %d", take)
+		}
+		if skip > 0 {
+			query += fmt.Sprintf(" OFFSET %d", skip)
+		}
+		rows, err := svc.db.QueryContext(ctx, query, args...)
+		if err != nil {
 			return nil, err
 		}
-		result = append(result, &m)
+		defer rows.Close()
+		var result []*Vote
+		for rows.Next() {
+			var m Vote
+			dest := scanDest(&m)
+			dest = dest[:len(cols)] // Ensure we only scan expected columns
+			if err := rows.Scan(dest...); err != nil {
+				return nil, err
+			}
+			structVal := reflect.ValueOf(&m).Elem()
+			for i := 0; i < len(cols); i++ {
+				switch placeholder := dest[i].(type) {
+				case *sql.NullString:
+					if placeholder.Valid {
+						structVal.Field(i).SetString(placeholder.String)
+					} else {
+						structVal.Field(i).SetString("")
+					}
+				case *TimeOrZero:
+					t := time.Time(*placeholder)
+					structVal.Field(i).Set(reflect.ValueOf(t))
+				}
+			}
+			// Load one‐level relations
+			result = append(result, &m)
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
 // Create inserts a new Vote record and updates the passed model with any returned values.
@@ -1309,6 +2518,15 @@ func (svc *VoteService) Create(ctx context.Context, m *Vote) error {
 	data["embeddedid"] = m.EmbeddedId
 	data["battlebotid"] = m.BattleBotId
 
+	// Remove empty string entries so they won't be inserted
+	for k, v := range data {
+		if str, ok := v.(string); ok {
+			if str == "" {
+				delete(data, k)
+			}
+		}
+	}
+
 	cols, placeholders, args := buildInsert(data)
 	colsList := strings.Join(cols, ", ")
 	phList := strings.Join(placeholders, ", ")
@@ -1317,10 +2535,23 @@ func (svc *VoteService) Create(ctx context.Context, m *Vote) error {
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING %s", "vote", colsList, phList, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
 
-	// Scan returned values back into the struct fields
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -1343,7 +2574,6 @@ func (svc *VoteService) Update(ctx context.Context, where map[string]interface{}
 	setClause, setArgs := buildSet(data, 1)
 	whereClause, whereArgs := buildWhereOffset(where, len(setArgs)+1)
 	args := append(setArgs, whereArgs...)
-	// Return all columns to repopulate the struct
 	allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "vote", setClause, whereClause, strings.Join(allCols, ", "))
 	row := svc.db.QueryRowContext(ctx, query, args...)
@@ -1351,6 +2581,20 @@ func (svc *VoteService) Update(ctx context.Context, where map[string]interface{}
 	dest := scanDest(m)
 	if err := row.Scan(dest...); err != nil {
 		return err
+	}
+	structVal := reflect.ValueOf(m).Elem()
+	for i := 0; i < structVal.NumField(); i++ {
+		switch placeholder := dest[i].(type) {
+		case *sql.NullString:
+			if placeholder.Valid {
+				structVal.Field(i).SetString(placeholder.String)
+			} else {
+				structVal.Field(i).SetString("")
+			}
+		case *TimeOrZero:
+			t := time.Time(*placeholder)
+			structVal.Field(i).Set(reflect.ValueOf(t))
+		}
 	}
 	return nil
 }
@@ -1361,20 +2605,17 @@ func (svc *VoteService) Upsert(ctx context.Context, where map[string]interface{}
 	if err != nil {
 		return err
 	}
-	// Check existence
 	existing, err := svc.FindUnique(ctx, where)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	if existing == nil {
-		// Create a new record
 		if err := svc.Create(ctx, m); err != nil {
 			tx.Rollback()
 			return err
 		}
 	} else {
-		// Update existing record; ensure primary key is set on m if needed
 		if err := svc.Update(ctx, where, m); err != nil {
 			tx.Rollback()
 			return err
@@ -1443,7 +2684,6 @@ func (svc *VoteService) UpdateMany(ctx context.Context, where []map[string]inter
 	var totalAffected int64 = 0
 	for i, m := range ms {
 		filter := where[i]
-		// Extract new values from the struct into a map
 		data := make(map[string]interface{})
 		data["createdat"] = m.CreatedAt
 		data["updatedat"] = m.UpdatedAt
@@ -1459,7 +2699,6 @@ func (svc *VoteService) UpdateMany(ctx context.Context, where []map[string]inter
 		setClause, setArgs := buildSet(data, 1)
 		whereClause, whereArgs := buildWhereOffset(filter, len(setArgs)+1)
 		args := append(setArgs, whereArgs...)
-		// Return all columns to repopulate the struct
 		allCols := []string{"id", "createdat", "updatedat", "deletedat", "name", "email", "verified", "networksid", "softwareid", "embeddedid", "battlebotid"}
 		query := fmt.Sprintf("UPDATE %s SET %s WHERE %s RETURNING %s", "vote", setClause, whereClause, strings.Join(allCols, ", "))
 		row := svc.db.QueryRowContext(ctx, query, args...)
@@ -1467,6 +2706,20 @@ func (svc *VoteService) UpdateMany(ctx context.Context, where []map[string]inter
 		dest := scanDest(m)
 		if err := row.Scan(dest...); err != nil {
 			return totalAffected, err
+		}
+		structVal := reflect.ValueOf(m).Elem()
+		for i := 0; i < structVal.NumField(); i++ {
+			switch placeholder := dest[i].(type) {
+			case *sql.NullString:
+				if placeholder.Valid {
+					structVal.Field(i).SetString(placeholder.String)
+				} else {
+					structVal.Field(i).SetString("")
+				}
+			case *TimeOrZero:
+				t := time.Time(*placeholder)
+				structVal.Field(i).Set(reflect.ValueOf(t))
+			}
 		}
 		totalAffected++
 	}
@@ -1486,7 +2739,6 @@ func (svc *VoteService) DeleteMany(ctx context.Context, where map[string]interfa
 
 // Aggregate computes SQL aggregates for Vote.
 func (svc *VoteService) Aggregate(ctx context.Context, where map[string]interface{}, agg map[string][]string) (map[string]interface{}, error) {
-	// agg keys: "_count", "_avg", "_sum", "_min", "_max"
 	selectClauses := []string{}
 	for key, fields := range agg {
 		for _, f := range fields {
@@ -1499,7 +2751,6 @@ func (svc *VoteService) Aggregate(ctx context.Context, where map[string]interfac
 		query += " WHERE " + whereClause
 	}
 	row := svc.db.QueryRowContext(ctx, query, args...)
-	// Scan into generic map
 	cols := strings.Split(strings.Join(selectClauses, ", "), ", ")
 	vals := make([]interface{}, len(cols))
 	result := map[string]interface{}{}
@@ -1616,10 +2867,4 @@ func buildSet(data map[string]interface{}, start int) (string, []interface{}) {
 		i++
 	}
 	return strings.Join(clauses, ", "), args
-}
-
-// scanDest returns a slice of pointers for scanning into struct fields
-func scanDest(m interface{}) []interface{} {
-	// leverage reflection or generate this per-model if needed
-	return []interface{}{ /* generated per-model field pointers */ }
 }

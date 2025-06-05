@@ -7,8 +7,7 @@ CREATE TABLE creator (
     email TEXT,
     phone TEXT,
     grade INTEGER,
-    class TEXT,
-    projectid INTEGER
+    class TEXT
 );
 
 CREATE INDEX idx_creator_1 ON creator (grade);

@@ -43,8 +43,7 @@ model Project {
     githubLink   String? // Optional
 
     // Relations
-    creator   Creator? @relation
-    creatorId Int? // A project may or may not have an assigned creator
+    creators Creator[]
 
     pictures         Picture[]
     votesAsNetwork   Vote[]    @relation("VoteNetworks")
@@ -63,14 +62,12 @@ model Creator {
     updatedAt DateTime  @updatedAt
     deletedAt DateTime?
 
-    name  String
-    email String  @unique
-    phone String?
-    grade Int // Valid values: 8,9,10,11,12 (enforced externally)
-    class String // Valid values: 'А', 'Б', 'В', 'Г' (enforced externally)
-
-    project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-    projectId Int     @unique
+    name    String
+    email   String    @unique
+    phone   String?
+    grade   Int // Valid values: 8,9,10,11,12 (enforced externally)
+    class   String // Valid values: 'А', 'Б', 'В', 'Г' (enforced externally)
+    Project Project[]
 
     @@index([grade])
     @@index([class])

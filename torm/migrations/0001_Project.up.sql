@@ -11,8 +11,7 @@ CREATE TABLE project (
     videolink TEXT,
     hasthumbnail BOOLEAN DEFAULT false,
     demolink TEXT,
-    githublink TEXT,
-    creatorid INTEGER
+    githublink TEXT
 );
 
 CREATE INDEX idx_project_1 ON project (type);

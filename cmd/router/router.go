@@ -8,9 +8,9 @@ import (
 
 	"net/http/pprof"
 
-	project "github.com/hacktues-9/tf-api/cmd/projects"
-	votes "github.com/hacktues-9/tf-api/cmd/votes"
-	"github.com/hacktues-9/tf-api/models"
+	project "github.com/TechXTT/tf-api-TORM/cmd/projects"
+	votes "github.com/TechXTT/tf-api-TORM/cmd/votes"
+	"github.com/TechXTT/tf-api-TORM/torm/models"
 	"github.com/rs/cors"
 
 	"github.com/gorilla/mux"
@@ -18,13 +18,12 @@ import (
 
 type Router struct {
 	router *mux.Router
-	client *models.Client
 }
 
 func LimitRequest(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		allowedDomains := []string{"tuesfest.bg", "*.tuesfest.bg", "*.vercel.app"}
+		allowedDomains := []string{"tuesfest.bg", "*.tuesfest.bg", "*.vercel.app", "localhost", "localhost"}
 
 		reqDomain := strings.Split(r.Host, ":")[0]
 
@@ -41,13 +40,13 @@ func LimitRequest(next http.Handler) http.Handler {
 	})
 }
 
-func NewRouter(client *models.Client) *Router {
+func NewRouter() *Router {
 	r := mux.NewRouter().PathPrefix("/v1").Subrouter().StrictSlash(true)
 
 	r.Use(mux.CORSMethodMiddleware(r))
 	r.Use(LimitRequest)
 
-	return &Router{r, client}
+	return &Router{r}
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -56,10 +55,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) GetRouter() *mux.Router {
 	return r.router
-}
-
-func (r *Router) GetDB() *models.Client {
-	return r.client
 }
 
 func (r *Router) Init() {
@@ -92,16 +87,19 @@ func (r *Router) Projects() {
 	router := r.GetRouter()
 	GetReq := router.PathPrefix("/get").Subrouter().StrictSlash(true)
 	GetReq.HandleFunc("/projects", func(writer http.ResponseWriter, request *http.Request) {
+		client := models.NewClient()
 		// call function GetProjects from projects package
-		project.GetProjectsTorm(writer, request, r.GetDB())
+		project.GetProjectsTorm(writer, request, client)
 	}).Methods("GET")
 	GetReq.HandleFunc("/project/{id}", func(writer http.ResponseWriter, request *http.Request) {
+		client := models.NewClient()
 		// call function GetProject from projects package
-		project.GetProjectTorm(writer, request, r.GetDB())
+		project.GetProjectTorm(writer, request, client)
 	}).Methods("GET")
 	GetReq.HandleFunc("/projects/{category}", func(writer http.ResponseWriter, request *http.Request) {
+		client := models.NewClient()
 		// call function GetProjectsByCategory from projects package
-		project.GetProjectsByCategoryTorm(writer, request, r.GetDB())
+		project.GetProjectsByCategoryTorm(writer, request, client)
 	}).Methods("GET")
 }
 
@@ -110,32 +108,16 @@ func (r *Router) Votes() {
 	PostReq := router.PathPrefix("/post").Subrouter().StrictSlash(true)
 	UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
 	PostReq.HandleFunc("/vote", func(writer http.ResponseWriter, request *http.Request) {
+		client := models.NewClient()
 		// call function PostVote from projects package
-		votes.PostVoteTorm(writer, request, r.GetDB())
+		votes.PostVoteTorm(writer, request, client)
 	}).Methods("POST")
 	UpdateReq.HandleFunc("/verify_vote", func(writer http.ResponseWriter, request *http.Request) {
+		client := models.NewClient()
 		// call function VerifyVote from projects package
-		votes.VerifyVoteTorm(writer, request, r.GetDB())
+		votes.VerifyVoteTorm(writer, request, client)
 	}).Methods("PUT")
 }
-
-// Already implemented in the database package, so no need to implement it here
-// func (r *Router) Database() {
-// 	router := r.GetRouter()
-// 	AdminReq := router.PathPrefix("/admin").Subrouter().StrictSlash(true)
-// 	AdminReq.HandleFunc("/init", func(w http.ResponseWriter, req *http.Request) {
-// 		database.Migrate(r.GetDB())
-// 		// return response with status code 200 and message "Database initialized"
-// 		w.Write([]byte("Database initialized"))
-// 		w.WriteHeader(http.StatusOK)
-// 	}).Methods("GET")
-// 	AdminReq.HandleFunc("/drop", func(w http.ResponseWriter, req *http.Request) {
-// 		database.Drop(r.GetDB())
-// 		// return response with status code 200 and message "Database dropped"
-// 		w.Write([]byte("Database dropped"))
-// 		w.WriteHeader(http.StatusOK)
-// 	}).Methods("GET")
-// }
 
 func (r *Router) Run() {
 	// r.Database()
@@ -145,7 +127,7 @@ func (r *Router) Run() {
 	fmt.Println("Routes initialized")
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"https://tuesfest.bg", "https://tuesfest.bg/", "https://*.tuesfest.bg", "https://*.tuesfest.bg/", "https://*.vercel.app", "https://*.vercel.app/"},
+		AllowedOrigins:   []string{"https://tuesfest.bg", "https://tuesfest.bg/", "https://*.tuesfest.bg", "https://*.tuesfest.bg/", "https://*.vercel.app", "https://*.vercel.app/", "http://localhost:3000", "http://localhost:8080"},
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},

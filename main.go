@@ -1,15 +1,11 @@
 package main
 
 import (
-	route "github.com/hacktues-9/tf-api/cmd/router"
-	models "github.com/hacktues-9/tf-api/models"
+	route "github.com/TechXTT/tf-api-TORM/cmd/router"
 	_ "github.com/joho/godotenv/autoload"
 )
 
 func main() {
-	// DB := db.Init()
-	client := models.NewClient()
-	r := route.NewRouter(client)
-	r.Init()
+	r := route.NewRouter()
 	r.Run()
 }
