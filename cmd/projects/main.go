@@ -48,7 +48,7 @@ func GetProjectsTorm(w http.ResponseWriter, r *http.Request, client *tormodels.C
 				for _, creator := range project.Creators {
 					creators = append(creators, models.GetProjectCreators{
 						Name:  creator.Name,
-						Class: string(creator.Grade) + creator.Class,
+						Class: fmt.Sprint(creator.Grade) + creator.Class,
 					})
 				}
 				return creators
@@ -101,7 +101,7 @@ func GetProjectTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Cl
 		for _, creator := range getProject.Creators {
 			creators = append(creators, models.GetProjectCreators{
 				Name:  creator.Name,
-				Class: string(creator.Grade) + creator.Class,
+				Class: fmt.Sprint(creator.Grade) + creator.Class,
 			})
 		}
 		return creators
@@ -152,7 +152,7 @@ func GetProjectsByCategoryTorm(w http.ResponseWriter, r *http.Request, client *t
 			for _, creator := range project.Creators {
 				creators = append(creators, models.GetProjectCreators{
 					Name:  creator.Name,
-					Class: string(creator.Grade) + creator.Class,
+					Class: fmt.Sprint(creator.Grade) + creator.Class,
 				})
 			}
 			return creators
