@@ -1,0 +1,132 @@
+---
+# Application ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tf-api-torm-config
+  namespace: tf-api-torm
+  labels:
+    app: tf-api-torm
+    component: api
+data:
+  DATABASE_URL: "postgresql://tfapi_user:tfapi_password@postgres:5432/tfapi?sslmode=disable"
+---
+# tf-api-TORM Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tf-api-torm
+  namespace: tf-api-torm
+  labels:
+    app: tf-api-torm
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tf-api-torm
+      component: api
+  template:
+    metadata:
+      labels:
+        app: tf-api-torm
+        component: api
+    spec:
+      initContainers:
+      - name: wait-for-db
+        image: postgres:15-alpine
+        command: ['sh', '-c', 
+          'until pg_isready -h postgres -p 5432 -U tfapi_user -d tfapi; do echo waiting for database; sleep 2; done;']
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+      containers:
+      - name: tf-api-torm
+        image: tf-api-torm:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: tf-api-torm-config
+              key: DATABASE_URL
+        - name: PRIVATE_KEY
+          value: "your-private-key-here"  # Replace with actual private key
+        - name: PUBLIC_KEY
+          value: "your-public-key-here"   # Replace with actual public key
+        - name: GMAIL_CLIENT_ID
+          value: "your-gmail-client-id"   # Replace with actual Gmail client ID
+        - name: GMAIL_CLIENT_SECRET
+          value: "your-gmail-client-secret" # Replace with actual Gmail client secret
+        - name: GMAIL_REFRESH_TOKEN
+          value: "your-gmail-refresh-token" # Replace with actual Gmail refresh token
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /v1/
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /v1/
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+# tf-api-TORM Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tf-api-torm
+  namespace: tf-api-torm
+  labels:
+    app: tf-api-torm
+    component: api
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: tf-api-torm
+    component: api
+---
+# Ingress (optional - uncomment if you have an ingress controller)
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: tf-api-torm-ingress
+#   namespace: tf-api-torm
+#   labels:
+#     app: tf-api-torm
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+#     nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+#     nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+#     nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+# spec:
+#   rules:
+#   - host: tf-api-torm.local  # Replace with your actual domain
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: tf-api-torm
+#             port:
+#               number: 80 
