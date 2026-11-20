@@ -3,6 +3,7 @@ module github.com/TechXTT/tf-api-TORM
 go 1.23.4
 
 require (
+	github.com/TechXTT/TORM/v2 v2.0.0
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1

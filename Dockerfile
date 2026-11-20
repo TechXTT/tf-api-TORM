@@ -2,10 +2,7 @@
 FROM golang:1.23-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git postgresql-client bash
-
-# Install TORM CLI
-RUN go install github.com/TechXTT/TORM/cmd/torm@latest
+RUN apk add --no-cache git
 
 # Set working directory
 WORKDIR /app
@@ -19,34 +16,10 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Make build script executable
-RUN chmod +x build.sh
-
-# Copy TORM binary to a location in PATH
-RUN cp $(go env GOPATH)/bin/torm /usr/local/bin/
-
-# Run TORM migrate dev to generate models (DATABASE_URL will be passed as build arg)
-ARG DATABASE_URL
-ENV DATABASE_URL=$DATABASE_URL
-
-# Wait for database and run TORM migrate dev
-RUN if [ -n "$DATABASE_URL" ]; then \
-        echo "Waiting for database..." && \
-        until pg_isready -d "$DATABASE_URL" -t 1; do \
-            echo "Database not ready, waiting..." && \
-            sleep 2; \
-        done && \
-        echo "Database ready! Running TORM migrate dev..." && \
-        torm migrate dev \
-            --schema prisma/schema.prisma \
-            --out-migrations torm/migrations \
-            --out-models torm/models; \
-    else \
-        echo "No DATABASE_URL provided, skipping TORM generation"; \
-    fi
-
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+# Build the CLI from the same release as the generated client's runtime.
+RUN go install "github.com/TechXTT/TORM/v2/cmd/torm@$(go list -m -f '{{.Version}}' github.com/TechXTT/TORM/v2)" && \
+    torm generate --out-models torm/models && \
+    CGO_ENABLED=0 go build -o main .
 
 # Stage 2: Runtime stage
 FROM alpine:latest
@@ -62,7 +35,7 @@ RUN addgroup -g 1001 -S appgroup && \
 WORKDIR /app
 
 # Copy TORM binary from builder stage
-COPY --from=builder /usr/local/bin/torm /usr/local/bin/
+COPY --from=builder /go/bin/torm /usr/local/bin/
 
 # Copy the built application
 COPY --from=builder /app/main /app/main

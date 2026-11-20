@@ -3,192 +3,100 @@ package projects
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"strconv"
 
 	models "github.com/TechXTT/tf-api-TORM/pkg/models"
 	tormodels "github.com/TechXTT/tf-api-TORM/torm/models"
 	"github.com/gorilla/mux"
 )
 
+var include = tormodels.ProjectInclude{Creators: true, Pictures: true}
+
+func text(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func projectResponse(project *tormodels.Project) models.GetProjectResponse {
+	var response = models.GetProjectResponse{
+		ID:           uint(project.Id),
+		Name:         project.Name,
+		Description:  text(project.Description),
+		Video:        text(project.VideoLink),
+		Type:         string(project.Type),
+		Category:     string(project.Category),
+		Mentor:       text(project.Mentor),
+		HasThumbnail: project.HasThumbnail,
+		Links:        models.GetProjectLinks{Github: text(project.GithubLink), Demo: text(project.DemoLink)},
+	}
+
+	for _, creator := range project.Creators {
+		response.Creators = append(response.Creators, models.GetProjectCreators{
+			Name: creator.Name, Class: fmt.Sprint(creator.Grade) + creator.Class,
+		})
+	}
+	for _, picture := range project.Pictures {
+		response.Pictures = append(response.Pictures, models.GetProjectPictures{
+			URL: picture.Url, IsThumbnail: picture.IsThumbnail,
+		})
+	}
+	return response
+}
+
 func GetProjectsTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Client) {
+	var query = tormodels.ProjectQuery{Include: include}
+
+	if category, ok := mux.Vars(r)["category"]; ok {
+		switch value := tormodels.Category(category); value {
+		case tormodels.CategoryNetworks, tormodels.CategorySoftware, tormodels.CategoryEmbedded, tormodels.CategoryBattlebot:
+			query.Filter = tormodels.ProjectFields.Category.Eq(value)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]models.GetProjectResponse(nil))
+			return
+		}
+	}
 	srv, err := client.ProjectService()
-	if err != nil && srv == nil {
-		log.Printf("Error initializing project service: %v", err)
+	if err != nil {
 		http.Error(w, "Failed to initialize project service", http.StatusInternalServerError)
 		return
 	}
-
-	projects, err := srv.FindMany(r.Context(), nil, nil, 0, 0)
+	projects, err := srv.Find(r.Context(), query)
 	if err != nil {
-		log.Printf("Error fetching projects: %v", err)
 		http.Error(w, "Failed to fetch projects", http.StatusInternalServerError)
 		return
 	}
-	fmt.Println("Projects fetched successfully")
-	var projectResponses []models.GetProjectResponse
+	var responses []models.GetProjectResponse
 	for _, project := range projects {
-
-		fmt.Println("Processing project:", project.Name, "Creators Name:", project.Creators[0].Name, "Pictures count:", len(project.Pictures))
-		projectResponses = append(projectResponses, models.GetProjectResponse{
-			ID:           uint(project.Id),
-			Name:         project.Name,
-			Description:  project.Description,
-			Video:        project.VideoLink,
-			Type:         string(project.Type),
-			Category:     string(project.Category),
-			Mentor:       project.Mentor,
-			HasThumbnail: project.HasThumbnail,
-			Links: models.GetProjectLinks{
-				Github: project.GithubLink,
-				Demo:   project.DemoLink,
-			},
-			Creators: func() []models.GetProjectCreators {
-				var creators []models.GetProjectCreators
-				for _, creator := range project.Creators {
-					creators = append(creators, models.GetProjectCreators{
-						Name:  creator.Name,
-						Class: fmt.Sprint(creator.Grade) + creator.Class,
-					})
-				}
-				return creators
-			}(),
-			Pictures: func() []models.GetProjectPictures {
-				var pictures []models.GetProjectPictures
-				for _, picture := range project.Pictures {
-					pictures = append(pictures, models.GetProjectPictures{
-						URL:         picture.Url,
-						IsThumbnail: picture.IsThumbnail,
-					})
-				}
-				return pictures
-			}(),
-		})
-
+		responses = append(responses, projectResponse(project))
 	}
-
-	w.Header().Set("Content-Type", "application/json charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(projectResponses)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(responses)
 }
 
 func GetProjectTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Client) {
+	id, err := strconv.Atoi(mux.Vars(r)["id"])
+	if err != nil {
+		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		return
+	}
 	srv, err := client.ProjectService()
 	if err != nil {
 		http.Error(w, "Failed to initialize project service", http.StatusInternalServerError)
 		return
 	}
-	projectID := mux.Vars(r)["id"]
-	getProject, err := srv.FindFirst(r.Context(), map[string]interface{}{"id": projectID})
+	project, err := srv.Fetch(r.Context(), tormodels.ProjectById(id), include)
 	if err != nil {
 		http.Error(w, "Failed to fetch project", http.StatusInternalServerError)
 		return
 	}
-
-	var project models.GetProjectResponse
-	project.ID = uint(getProject.Id)
-	project.Name = getProject.Name
-	project.Description = getProject.Description
-	project.Video = getProject.VideoLink
-	project.Type = string(getProject.Type)
-	project.Category = string(getProject.Category)
-	project.Mentor = getProject.Mentor
-	project.HasThumbnail = getProject.HasThumbnail
-	project.Links.Github = getProject.GithubLink
-	project.Links.Demo = getProject.DemoLink
-	project.Creators = func() []models.GetProjectCreators {
-		var creators []models.GetProjectCreators
-		for _, creator := range getProject.Creators {
-			creators = append(creators, models.GetProjectCreators{
-				Name:  creator.Name,
-				Class: fmt.Sprint(creator.Grade) + creator.Class,
-			})
-		}
-		return creators
-	}()
-	// Fetch pictures
-	pictureSrv, err := client.PictureService()
-	if err != nil {
-		http.Error(w, "Failed to fetch pictures", http.StatusInternalServerError)
+	if project == nil {
+		http.Error(w, "Project not found", http.StatusNotFound)
 		return
 	}
-	pictures, err := pictureSrv.FindMany(r.Context(), map[string]interface{}{"projectid": uint(getProject.Id)}, nil, 0, 0)
-	if err != nil {
-		http.Error(w, "Failed to fetch pictures", http.StatusInternalServerError)
-		return
-	}
-	var pictureList []models.GetProjectPictures
-	for _, picture := range pictures {
-		pictureList = append(pictureList, models.GetProjectPictures{
-			URL:         picture.Url,
-			IsThumbnail: picture.IsThumbnail,
-		})
-	}
-	project.Pictures = pictureList
-
-	w.Header().Set("Content-Type", "application/json charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(project)
-}
-
-func GetProjectsByCategoryTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Client) {
-	srv, err := client.ProjectService()
-	if err != nil {
-		http.Error(w, "Failed to initialize project service", http.StatusInternalServerError)
-		return
-	}
-
-	category := mux.Vars(r)["category"]
-	getProjects, err := srv.FindMany(r.Context(), map[string]interface{}{"category": category}, nil, 0, 0)
-	if err != nil {
-		http.Error(w, "Failed to fetch projects by category", http.StatusInternalServerError)
-		return
-	}
-
-	var projects []models.GetProjectResponse
-	for _, project := range getProjects {
-		creators := func() []models.GetProjectCreators {
-			var creators []models.GetProjectCreators
-			for _, creator := range project.Creators {
-				creators = append(creators, models.GetProjectCreators{
-					Name:  creator.Name,
-					Class: fmt.Sprint(creator.Grade) + creator.Class,
-				})
-			}
-			return creators
-		}()
-
-		picturesList := func() []models.GetProjectPictures {
-			var pictures []models.GetProjectPictures
-			for _, picture := range project.Pictures {
-				pictures = append(pictures, models.GetProjectPictures{
-					URL:         picture.Url,
-					IsThumbnail: picture.IsThumbnail,
-				})
-			}
-			return pictures
-		}()
-
-		// Append project details to the response
-		projects = append(projects, models.GetProjectResponse{
-			ID:           uint(project.Id),
-			Name:         project.Name,
-			Description:  project.Description,
-			Video:        project.VideoLink,
-			Type:         string(project.Type),
-			Category:     string(project.Category),
-			Mentor:       project.Mentor,
-			HasThumbnail: project.HasThumbnail,
-			Links: models.GetProjectLinks{
-				Github: project.GithubLink,
-				Demo:   project.DemoLink,
-			},
-			Creators: creators,
-			Pictures: picturesList,
-		})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(projects)
+	json.NewEncoder(w).Encode(projectResponse(project))
 }

@@ -43,6 +43,16 @@ spec:
             secretKeyRef:
               name: postgres-secret
               key: POSTGRES_PASSWORD
+      - name: migrate
+        image: tf-api-torm:latest
+        imagePullPolicy: Always
+        command: ["torm", "migrate", "deploy", "--dir", "torm/migrations-v2"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: tf-api-torm-config
+              key: DATABASE_URL
       containers:
       - name: tf-api-torm
         image: tf-api-torm:latest

@@ -99,16 +99,24 @@ docker run -d \
 export DATABASE_URL="postgresql://tfapi_user:tfapi_password@localhost:5432/tfapi?sslmode=disable"
 ```
 
-3. **Generate TORM models and run migrations**:
+3. **Generate the v2 client, build the API, and initialize an empty database**
 ```bash
 chmod +x build.sh
 ./build.sh
+torm_version=$(go list -m -f '{{.Version}}' github.com/TechXTT/TORM/v2)
+go run "github.com/TechXTT/TORM/v2/cmd/torm@${torm_version}" migrate deploy --dir torm/migrations-v2
 ```
 
 4. **Run the application**:
 ```bash
 go run main.go
 ```
+
+### Existing v1 databases
+
+The original SQL under `torm/migrations` adds `project.mentor` in both 0001 and 0005. Fresh installs use a separate v2 history under `torm/migrations-v2`. Use that directory for subsequent v2 migration commands as well.
+
+For a populated v1 installation, prepare a separate empty database with the v2 migration before switching the API connection. With writes paused, copy projects and creators first, followed by pictures, votes, and creator–project links. Preserve IDs and map `creator_project.creator_id` and `project_id` to `"_CreatorToProject"."A"` and `"B"` respectively. Advance each identity sequence past its imported IDs. Verify row counts, relation counts, and vote lookups before cutover. Resolve any legacy nulls, duplicate unique values, invalid enum labels, or orphaned references that the v2 constraints reject. Keep the source database available for rollback.
 
 ### Building Docker Image
 

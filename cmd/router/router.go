@@ -2,7 +2,9 @@ package router
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -83,46 +85,40 @@ func (r *Router) Pprof() {
 	debugProf.Handle("/vars", http.DefaultServeMux)
 }
 
-func (r *Router) Projects() {
+func (r *Router) Projects(client *models.Client) {
 	router := r.GetRouter()
 	GetReq := router.PathPrefix("/get").Subrouter().StrictSlash(true)
 	GetReq.HandleFunc("/projects", func(writer http.ResponseWriter, request *http.Request) {
-		client := models.NewClient()
-		// call function GetProjects from projects package
 		project.GetProjectsTorm(writer, request, client)
 	}).Methods("GET")
 	GetReq.HandleFunc("/project/{id}", func(writer http.ResponseWriter, request *http.Request) {
-		client := models.NewClient()
-		// call function GetProject from projects package
 		project.GetProjectTorm(writer, request, client)
 	}).Methods("GET")
 	GetReq.HandleFunc("/projects/{category}", func(writer http.ResponseWriter, request *http.Request) {
-		client := models.NewClient()
-		// call function GetProjectsByCategory from projects package
-		project.GetProjectsByCategoryTorm(writer, request, client)
+		project.GetProjectsTorm(writer, request, client)
 	}).Methods("GET")
 }
 
-func (r *Router) Votes() {
+func (r *Router) Votes(client *models.Client) {
 	router := r.GetRouter()
 	PostReq := router.PathPrefix("/post").Subrouter().StrictSlash(true)
 	UpdateReq := router.PathPrefix("/update").Subrouter().StrictSlash(true)
 	PostReq.HandleFunc("/vote", func(writer http.ResponseWriter, request *http.Request) {
-		client := models.NewClient()
-		// call function PostVote from projects package
 		votes.PostVoteTorm(writer, request, client)
 	}).Methods("POST")
 	UpdateReq.HandleFunc("/verify_vote", func(writer http.ResponseWriter, request *http.Request) {
-		client := models.NewClient()
-		// call function VerifyVote from projects package
 		votes.VerifyVoteTorm(writer, request, client)
 	}).Methods("PUT")
 }
 
 func (r *Router) Run() {
-	// r.Database()
-	r.Projects()
-	r.Votes()
+	client, err := models.Open(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+	r.Projects(client)
+	r.Votes(client)
 	r.Init()
 	fmt.Println("Routes initialized")
 
@@ -135,7 +131,7 @@ func (r *Router) Run() {
 
 	handler := c.Handler(r)
 
-	err := http.ListenAndServe(":8080", handler)
+	err = http.ListenAndServe(":8080", handler)
 	if err != nil {
 		fmt.Println(err)
 		return

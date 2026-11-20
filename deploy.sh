@@ -51,26 +51,8 @@ kubectl apply -f k8s/postgres.yaml
 print_status "Waiting for PostgreSQL to be ready..."
 kubectl wait --for=condition=ready pod -l app=tf-api-torm,component=database -n ${NAMESPACE} --timeout=300s
 
-print_status "Setting up port forward for database access during build..."
-# Start port forward in background
-kubectl port-forward svc/postgres 5432:5432 -n ${NAMESPACE} &
-PF_PID=$!
-
-# Ensure port forward is killed on exit
-trap "kill $PF_PID 2>/dev/null || true" EXIT
-
-# Wait a moment for port forward to establish
-sleep 5
-
-print_status "Building Docker image with database access..."
-# Build the Docker image with DATABASE_URL as build argument
-docker build \
-    --build-arg DATABASE_URL="postgresql://tfapi_user:tfapi_password@host.docker.internal:5432/tfapi?sslmode=disable" \
-    -t ${IMAGE_NAME}:${IMAGE_TAG} .
-
-# Stop port forward
-kill $PF_PID 2>/dev/null || true
-trap - EXIT # Clear the trap
+print_status "Building Docker image..."
+docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
 
 print_status "Deploying tf-api-TORM application..."
 kubectl apply -f k8s/tf-api-torm.yaml
