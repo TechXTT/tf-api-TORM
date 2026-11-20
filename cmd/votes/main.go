@@ -56,46 +56,51 @@ func PostVoteTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Clie
 		return
 	}
 
-	existing, err := srv.Fetch(r.Context(), tormodels.VoteByEmail(reqVote.Email), tormodels.VoteInclude{})
+	existing, err := srv.CountWhere(r.Context(), tormodels.VoteFields.Email.Eq(reqVote.Email))
 	if err != nil {
 		http.Error(w, "Error checking existing vote", http.StatusInternalServerError)
 		return
 	}
-	if existing != nil {
+	if existing > 0 {
 		http.Error(w, "Already voted", http.StatusBadRequest)
 		return
 	}
 
-	// check if each project exists
-	if netProj, err := projSrv.Fetch(r.Context(), tormodels.ProjectById(int(reqVote.NetworksID)), tormodels.ProjectInclude{}); err != nil || netProj == nil {
-		http.Error(w, "Project not found", http.StatusBadRequest)
-		return
-	} else if netProj.Category != "networks" {
-		http.Error(w, "Invalid networks project", http.StatusBadRequest)
+	choices := []struct {
+		id       uint
+		category tormodels.Category
+	}{
+		{reqVote.NetworksID, tormodels.CategoryNetworks},
+		{reqVote.SoftwareID, tormodels.CategorySoftware},
+		{reqVote.EmbeddedID, tormodels.CategoryEmbedded},
+		{reqVote.BattleBotID, tormodels.CategoryBattlebot},
+	}
+	var filters []runtime.Filter[tormodels.Project]
+	for _, choice := range choices {
+		filters = append(filters, tormodels.ProjectFields.Id.Eq(int(choice.id)))
+	}
+	var query tormodels.ProjectQuery
+	query.Filter = runtime.Or(filters...)
+	projects, err := projSrv.Find(r.Context(), query)
+	if err != nil {
+		http.Error(w, "Failed to fetch projects", http.StatusInternalServerError)
 		return
 	}
-	if softProj, err := projSrv.Fetch(r.Context(), tormodels.ProjectById(int(reqVote.SoftwareID)), tormodels.ProjectInclude{}); err != nil || softProj == nil {
-		http.Error(w, "Project not found", http.StatusBadRequest)
-		return
-	} else if softProj.Category != "software" {
-		http.Error(w, "Invalid software project", http.StatusBadRequest)
-		return
+	categories := make(map[uint]tormodels.Category, len(projects))
+	for _, project := range projects {
+		categories[uint(project.Id)] = project.Category
 	}
-	if embProj, err := projSrv.Fetch(r.Context(), tormodels.ProjectById(int(reqVote.EmbeddedID)), tormodels.ProjectInclude{}); err != nil || embProj == nil {
-		http.Error(w, "Project not found", http.StatusBadRequest)
-		return
-	} else if embProj.Category != "embedded" {
-		http.Error(w, "Invalid embedded project", http.StatusBadRequest)
-		return
+	for _, choice := range choices {
+		category, found := categories[choice.id]
+		if !found {
+			http.Error(w, "Project not found", http.StatusBadRequest)
+			return
+		}
+		if category != choice.category {
+			http.Error(w, "Invalid "+string(choice.category)+" project", http.StatusBadRequest)
+			return
+		}
 	}
-	if battProj, err := projSrv.Fetch(r.Context(), tormodels.ProjectById(int(reqVote.BattleBotID)), tormodels.ProjectInclude{}); err != nil || battProj == nil {
-		http.Error(w, "Project not found", http.StatusBadRequest)
-		return
-	} else if battProj.Category != "battlebot" {
-		http.Error(w, "Invalid battlebot project", http.StatusBadRequest)
-		return
-	}
-	// Create the vote
 
 	vote, err := srv.Insert(r.Context(), tormodels.VoteCreate{
 		Name:        runtime.Set(reqVote.Name),
@@ -208,24 +213,24 @@ func VerifyVoteTorm(w http.ResponseWriter, r *http.Request, client *tormodels.Cl
 		return
 	}
 
-	vote, err := srv.Fetch(r.Context(), tormodels.VoteByEmail(claims), tormodels.VoteInclude{})
+	emailFilter := tormodels.VoteFields.Email.Eq(claims)
+	unverified := runtime.And(emailFilter, tormodels.VoteFields.Verified.Eq(false))
+	updated, err := srv.UpdateWhere(r.Context(), unverified, tormodels.VoteUpdate{Verified: runtime.Set(true)})
 	if err != nil {
-		http.Error(w, "Error finding vote", http.StatusInternalServerError)
-		return
-	}
-
-	if vote == nil {
-		http.Error(w, "Invalid vote", http.StatusBadRequest)
-		return
-	}
-
-	if vote.Verified {
-		http.Error(w, "Already verified", http.StatusBadRequest)
-		return
-	}
-
-	if _, err := srv.Patch(r.Context(), tormodels.VoteById(vote.Id), tormodels.VoteUpdate{Verified: runtime.Set(true)}); err != nil {
 		http.Error(w, "Error saving vote", http.StatusInternalServerError)
+		return
+	}
+	if updated == 0 {
+		existing, err := srv.CountWhere(r.Context(), emailFilter)
+		if err != nil {
+			http.Error(w, "Error finding vote", http.StatusInternalServerError)
+			return
+		}
+		if existing == 0 {
+			http.Error(w, "Invalid vote", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Already verified", http.StatusBadRequest)
 		return
 	}
 
